@@ -60,6 +60,9 @@ public class SubscriptionMaintenanceJob : BackgroundService
 
         foreach (var channel in channelsToRenew)
         {
+            // Check for cancellation before processing each channel
+            cancellationToken.ThrowIfCancellationRequested();
+            
             try
             {
                 var success = await webSubService.SubscribeAsync(

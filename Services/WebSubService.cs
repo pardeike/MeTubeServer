@@ -132,12 +132,29 @@ public class WebSubService
             }
 
             var computedHmac = BitConverter.ToString(computedHash).Replace("-", "").ToLowerInvariant();
-            return computedHmac == providedHmac.ToLowerInvariant();
+            
+            // Use constant-time comparison to prevent timing attacks
+            return ConstantTimeEquals(computedHmac, providedHmac.ToLowerInvariant());
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error verifying HMAC signature");
             return false;
         }
+    }
+
+    /// <summary>
+    /// Performs constant-time string comparison to prevent timing attacks.
+    /// </summary>
+    private static bool ConstantTimeEquals(string a, string b)
+    {
+        if (a.Length != b.Length)
+            return false;
+
+        uint diff = 0;
+        for (int i = 0; i < a.Length; i++)
+            diff |= (uint)(a[i] ^ b[i]);
+
+        return diff == 0;
     }
 }
