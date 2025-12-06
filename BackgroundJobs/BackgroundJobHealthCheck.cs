@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using System.Collections.Concurrent;
 
 namespace MeTubeServer.BackgroundJobs;
 
@@ -8,49 +9,45 @@ namespace MeTubeServer.BackgroundJobs;
 /// </summary>
 public class BackgroundJobHealthCheck : IHealthCheck
 {
-    private readonly Dictionary<string, JobHealthStatus> _jobStatuses = new();
-    private readonly object _lock = new();
+    private readonly ConcurrentDictionary<string, JobHealthStatus> _jobStatuses = new();
 
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        lock (_lock)
+        var now = DateTimeOffset.UtcNow;
+        var unhealthyJobs = new List<string>();
+        var degradedJobs = new List<string>();
+
+        foreach (var (jobName, status) in _jobStatuses)
         {
-            var now = DateTimeOffset.UtcNow;
-            var unhealthyJobs = new List<string>();
-            var degradedJobs = new List<string>();
+            // Consider job unhealthy if it hasn't run in 2x its expected interval
+            var timeSinceLastRun = now - status.LastRunTime;
+            var maxExpectedInterval = status.ExpectedInterval * 2;
 
-            foreach (var (jobName, status) in _jobStatuses)
+            if (timeSinceLastRun > maxExpectedInterval)
             {
-                // Consider job unhealthy if it hasn't run in 2x its expected interval
-                var timeSinceLastRun = now - status.LastRunTime;
-                var maxExpectedInterval = status.ExpectedInterval * 2;
-
-                if (timeSinceLastRun > maxExpectedInterval)
-                {
-                    unhealthyJobs.Add($"{jobName} (last run: {status.LastRunTime:O})");
-                }
-                else if (status.ConsecutiveErrors >= 3)
-                {
-                    degradedJobs.Add($"{jobName} ({status.ConsecutiveErrors} consecutive errors)");
-                }
+                unhealthyJobs.Add($"{jobName} (last run: {status.LastRunTime:O})");
             }
-
-            if (unhealthyJobs.Any())
+            else if (status.ConsecutiveErrors >= 3)
             {
-                return Task.FromResult(HealthCheckResult.Unhealthy(
-                    $"Background jobs not running: {string.Join(", ", unhealthyJobs)}"));
+                degradedJobs.Add($"{jobName} ({status.ConsecutiveErrors} consecutive errors)");
             }
-
-            if (degradedJobs.Any())
-            {
-                return Task.FromResult(HealthCheckResult.Degraded(
-                    $"Background jobs with errors: {string.Join(", ", degradedJobs)}"));
-            }
-
-            return Task.FromResult(HealthCheckResult.Healthy("All background jobs running normally"));
         }
+
+        if (unhealthyJobs.Any())
+        {
+            return Task.FromResult(HealthCheckResult.Unhealthy(
+                $"Background jobs not running: {string.Join(", ", unhealthyJobs)}"));
+        }
+
+        if (degradedJobs.Any())
+        {
+            return Task.FromResult(HealthCheckResult.Degraded(
+                $"Background jobs with errors: {string.Join(", ", degradedJobs)}"));
+        }
+
+        return Task.FromResult(HealthCheckResult.Healthy("All background jobs running normally"));
     }
 
     /// <summary>
@@ -58,19 +55,20 @@ public class BackgroundJobHealthCheck : IHealthCheck
     /// </summary>
     public void RecordJobExecution(string jobName, TimeSpan expectedInterval)
     {
-        lock (_lock)
-        {
-            if (!_jobStatuses.ContainsKey(jobName))
+        _jobStatuses.AddOrUpdate(
+            jobName,
+            new JobHealthStatus
             {
-                _jobStatuses[jobName] = new JobHealthStatus
-                {
-                    ExpectedInterval = expectedInterval
-                };
-            }
-
-            _jobStatuses[jobName].LastRunTime = DateTimeOffset.UtcNow;
-            _jobStatuses[jobName].ConsecutiveErrors = 0;
-        }
+                ExpectedInterval = expectedInterval,
+                LastRunTime = DateTimeOffset.UtcNow,
+                ConsecutiveErrors = 0
+            },
+            (key, existing) =>
+            {
+                existing.LastRunTime = DateTimeOffset.UtcNow;
+                existing.ConsecutiveErrors = 0;
+                return existing;
+            });
     }
 
     /// <summary>
@@ -78,13 +76,14 @@ public class BackgroundJobHealthCheck : IHealthCheck
     /// </summary>
     public void RecordJobError(string jobName)
     {
-        lock (_lock)
-        {
-            if (_jobStatuses.ContainsKey(jobName))
+        _jobStatuses.AddOrUpdate(
+            jobName,
+            new JobHealthStatus { ConsecutiveErrors = 1 },
+            (key, existing) =>
             {
-                _jobStatuses[jobName].ConsecutiveErrors++;
-            }
-        }
+                existing.ConsecutiveErrors++;
+                return existing;
+            });
     }
 
     private class JobHealthStatus

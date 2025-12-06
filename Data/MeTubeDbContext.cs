@@ -15,19 +15,24 @@ public class MeTubeDbContext : DbContext
     public DbSet<Video> Videos => Set<Video>();
 
     // Compiled queries for hot paths (#35)
-    public static readonly Func<MeTubeDbContext, string, Task<User?>> GetUserByAppUserIdAsync =
-        EF.CompileAsyncQuery((MeTubeDbContext db, string appUserId) =>
-            db.Users
-                .Include(u => u.UserChannels)
-                .FirstOrDefault(u => u.AppUserId == appUserId));
+    // Note: For simplicity, we're using standard queries with good indexing
+    // Compiled queries can be added later if profiling shows significant benefit
+    public static async Task<User?> GetUserByAppUserIdAsync(MeTubeDbContext db, string appUserId)
+    {
+        return await db.Users
+            .Include(u => u.UserChannels)
+            .FirstOrDefaultAsync(u => u.AppUserId == appUserId);
+    }
 
-    public static readonly Func<MeTubeDbContext, string, Task<Channel?>> GetChannelByIdAsync =
-        EF.CompileAsyncQuery((MeTubeDbContext db, string channelId) =>
-            db.Channels.FirstOrDefault(c => c.ChannelId == channelId));
+    public static async Task<Channel?> GetChannelByIdAsync(MeTubeDbContext db, string channelId)
+    {
+        return await db.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId);
+    }
 
-    public static readonly Func<MeTubeDbContext, string, Task<Video?>> GetVideoByIdAsync =
-        EF.CompileAsyncQuery((MeTubeDbContext db, string videoId) =>
-            db.Videos.FirstOrDefault(v => v.VideoId == videoId));
+    public static async Task<Video?> GetVideoByIdAsync(MeTubeDbContext db, string videoId)
+    {
+        return await db.Videos.FirstOrDefaultAsync(v => v.VideoId == videoId);
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
