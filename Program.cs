@@ -44,6 +44,42 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+// Health check endpoint
+app.MapGet("/health", async (MeTubeDbContext db) =>
+{
+    try
+    {
+        // Check database connectivity
+        var canConnect = await db.Database.CanConnectAsync();
+        if (!canConnect)
+        {
+            return Results.Json(new { status = "unhealthy", message = "Database connection failed" }, statusCode: 503);
+        }
+
+        // Get some basic stats
+        var channelCount = await db.Channels.CountAsync();
+        var userCount = await db.Users.CountAsync();
+        var videoCount = await db.Videos.CountAsync();
+
+        return Results.Ok(new
+        {
+            status = "healthy",
+            timestamp = DateTimeOffset.UtcNow,
+            stats = new
+            {
+                channels = channelCount,
+                users = userCount,
+                videos = videoCount
+            }
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { status = "unhealthy", message = ex.Message }, statusCode: 503);
+    }
+})
+.WithName("HealthCheck");
+
 // WebSub Endpoints
 app.MapGet("/websub/youtube", async (HttpContext context, MeTubeDbContext db, ILogger<Program> logger) =>
 {

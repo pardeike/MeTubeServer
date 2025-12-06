@@ -235,6 +235,9 @@ az containerapp create \
 ### Check Server Health
 
 ```bash
+# Check health endpoint
+curl http://localhost:5000/health
+
 # View logs
 docker-compose logs -f
 

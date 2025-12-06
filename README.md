@@ -121,6 +121,32 @@ cloudflared tunnel --url http://localhost:5000 run metubeserver
 
 ## API Endpoints
 
+### Health Check
+
+#### `GET /health`
+Health check endpoint for monitoring server status.
+
+**Response (Healthy):**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-12-06T12:00:00Z",
+  "stats": {
+    "channels": 10,
+    "users": 5,
+    "videos": 250
+  }
+}
+```
+
+**Response (Unhealthy):**
+```json
+{
+  "status": "unhealthy",
+  "message": "Database connection failed"
+}
+```
+
 ### WebSub Callbacks
 
 #### `GET /websub/youtube`
