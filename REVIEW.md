@@ -126,7 +126,7 @@ catch
 }
 ```
 
-### 6. Video Metadata Not Enriched
+### ✅ 6. Video Metadata Not Enriched
 
 **Issue**: WebSub notifications only provide basic video info (videoId, channelId, publishedAt, title). Missing: description, thumbnail, duration.
 
