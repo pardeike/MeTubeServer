@@ -528,14 +528,17 @@ app.MapPost("/api/users/{appUserId}/channels", async (
             .Where(c => uniqueChannelIds.Contains(c.ChannelId))
             .ToListAsync();
         
+        // Fetch all existing UserChannel relationships in a single query to avoid N+1
+        var existingUserChannels = await db.UserChannels
+            .Where(uc => uc.UserId == user.Id && allChannels.Select(c => c.Id).Contains(uc.ChannelId))
+            .Select(uc => uc.ChannelId)
+            .ToListAsync();
+        
         foreach (var channel in allChannels)
         {
-            var userChannel = await db.UserChannels
-                .FirstOrDefaultAsync(uc => uc.UserId == user.Id && uc.ChannelId == channel.Id);
-
-            if (userChannel == null)
+            if (!existingUserChannels.Contains(channel.Id))
             {
-                userChannel = new UserChannel
+                var userChannel = new UserChannel
                 {
                     UserId = user.Id,
                     ChannelId = channel.Id

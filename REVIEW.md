@@ -26,9 +26,9 @@ This document tracks comprehensive analysis and resolution of issues in the MeTu
 - Full observability with metrics and health checks
 - Robust error handling and resilience patterns
 
-**Issues Addressed**: 37 of 42 original issues fixed
+**Issues Addressed**: 38 of 43 issues fixed
 **Excluded from Scope**: 4 issues (video retention, unit tests, SQLite WAL, deleted video reconciliation)
-**New Issues Identified**: 2 minor issues for future consideration
+**Deferred**: 1 issue (Program.cs size - long-term maintainability consideration)
 
 **Summary**: All critical and high-priority issues have been resolved. The server now includes background task queuing, rate limiting, security hardening, observability, health checks, and comprehensive error handling. Ready for production deployment.
 
@@ -328,56 +328,15 @@ public static class WebSubEndpoints
 
 **Note**: Basic troubleshooting exists in documentation. Further expansion should be based on actual user feedback and common issues encountered in production.
 
----
+### ✅ 45. N+1 Query in Channel Registration - FIXED
 
-## New Issues Identified During Review
-
-### 45. Potential N+1 Query in Channel Registration UserChannel Linking
-
-**Issue**: In the channel registration endpoint (lines 533-544), the code checks for existing UserChannel relationships one at a time in a loop, potentially causing N+1 database queries.
-
-**Problem**: For users registering many channels, this performs one database query per channel to check if the relationship already exists.
-
-**Code Location**: Program.cs, lines 533-544:
-```csharp
-foreach (var channel in allChannels)
-{
-    var userChannel = await db.UserChannels
-        .FirstOrDefaultAsync(uc => uc.UserId == user.Id && uc.ChannelId == channel.Id);
-    // ...
-}
-```
-
-**Impact**: Performance degradation when registering many channels at once.
-
-**Recommendation**: Fetch all existing UserChannel relationships in a single query before the loop:
-```csharp
-var existingUserChannels = await db.UserChannels
-    .Where(uc => uc.UserId == user.Id && allChannels.Select(c => c.Id).Contains(uc.ChannelId))
-    .Select(uc => uc.ChannelId)
-    .ToListAsync();
-
-foreach (var channel in allChannels)
-{
-    if (!existingUserChannels.Contains(channel.Id))
-    {
-        var userChannel = new UserChannel
-        {
-            UserId = user.Id,
-            ChannelId = channel.Id
-        };
-        db.UserChannels.Add(userChannel);
-    }
-}
-```
+**Solution Implemented**: Fetch all existing UserChannel relationships in a single query before the loop to avoid N+1 pattern.
 
 ### 46. Program.cs Size and Maintainability
 
-**Issue**: Program.cs is 659 lines with all endpoint definitions inline, making it harder to navigate and test.
+**Issue**: Program.cs is 659 lines with all endpoint definitions inline.
 
-**Status**: While the code is well-organized with clear section comments, it could benefit from modularization.
-
-**Recommendation**: For future refactoring, consider extracting endpoint definitions into separate extension methods or minimal API endpoint classes. This is not urgent but would improve long-term maintainability.
+**Note**: While the code is well-organized with clear section comments, it could benefit from modularization in future refactoring. Not urgent.
 
 ---
 
@@ -431,6 +390,7 @@ The MeTube Hub Server has successfully addressed the majority of critical, high-
 - ✅ Security hardening (HMAC timing attack prevention, request size limits, non-root Docker user)
 - ✅ XML documentation throughout
 - ✅ Structured logging consistently applied
+- ✅ N+1 query pattern in UserChannel linking fixed
 
 **Outstanding Items (Excluded or Low Priority):**
 - Video retention policy (#7) - Excluded from current scope
@@ -438,9 +398,6 @@ The MeTube Hub Server has successfully addressed the majority of critical, high-
 - SQLite WAL mode optimization (#19) - Deferred
 - Reconciliation deleted video handling (#23) - Deferred
 - Examples validation (#43) - Deferred
-
-**Newly Identified Issues:**
-- N+1 query pattern in UserChannel linking (#45) - Minor performance concern
 - Program.cs size (#46) - Long-term maintainability consideration
 
 **Production Readiness:**
