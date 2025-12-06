@@ -50,7 +50,11 @@ builder.Services.AddHttpClient<WebSubService>()
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
-builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
+{
+    var options = sp.GetRequiredService<IOptions<HubOptions>>().Value;
+    return new BackgroundTaskQueue(options.BackgroundTaskQueueCapacity);
+});
 
 // Add background jobs
 builder.Services.AddHostedService<QueuedHostedService>();
@@ -521,41 +525,43 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     }
 
     // Fix N+1 pattern by projecting directly to DTO (#33)
-    var query = db.Videos
-        .Where(v => channelIds.Contains(v.ChannelId));
+    var query = from v in db.Videos
+                join c in db.Channels on v.ChannelId equals c.Id
+                where channelIds.Contains(v.ChannelId)
+                select new { Video = v, Channel = c };
 
     if (sinceDate.HasValue)
     {
-        query = query.Where(v => v.PublishedAt > sinceDate.Value);
+        query = query.Where(x => x.Video.PublishedAt > sinceDate.Value);
     }
 
-    var videos = await query
-        .OrderByDescending(v => v.PublishedAt)
+    var results = await query
+        .OrderByDescending(x => x.Video.PublishedAt)
         .Take(effectiveLimit + 1) // Fetch one extra to determine if there are more results
-        .Select(v => new VideoDto
+        .Select(x => new VideoDto
         {
-            VideoId = v.VideoId,
-            ChannelId = v.Channel.ChannelId,
-            PublishedAt = v.PublishedAt,
-            Title = v.Title,
-            Description = v.Description,
-            ThumbnailUrl = v.ThumbnailUrl,
-            Duration = v.Duration
+            VideoId = x.Video.VideoId,
+            ChannelId = x.Channel.ChannelId,
+            PublishedAt = x.Video.PublishedAt,
+            Title = x.Video.Title,
+            Description = x.Video.Description,
+            ThumbnailUrl = x.Video.ThumbnailUrl,
+            Duration = x.Video.Duration
         })
         .ToListAsync();
 
     // Implement pagination (#13)
     string? nextCursor = null;
-    if (videos.Count > effectiveLimit)
+    if (results.Count > effectiveLimit)
     {
-        // There are more results
-        nextCursor = videos[effectiveLimit - 1].PublishedAt.ToString("O");
-        videos = videos.Take(effectiveLimit).ToList();
+        // There are more results - use the last item that will be returned for the cursor
+        nextCursor = results[effectiveLimit - 1].PublishedAt.ToString("O");
+        results = results.Take(effectiveLimit).ToList();
     }
 
     var response = new FeedResponse
     {
-        Videos = videos,
+        Videos = results,
         NextCursor = nextCursor
     };
 

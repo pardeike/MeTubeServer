@@ -79,6 +79,11 @@ public class VideoEnrichmentService
 
         try
         {
+            // Fetch all videos in a single query to avoid N+1
+            var videos = await db.Videos
+                .Where(v => videoIds.Contains(v.VideoId))
+                .ToListAsync(cancellationToken);
+            
             var details = await _youtubeApi.GetVideosDetailsAsync(videoIds, cancellationToken);
             
             if (details.Count == 0)
@@ -92,7 +97,7 @@ public class VideoEnrichmentService
                 if (string.IsNullOrEmpty(videoDetails.Id))
                     continue;
 
-                var video = await db.Videos.FirstOrDefaultAsync(v => v.VideoId == videoDetails.Id, cancellationToken);
+                var video = videos.FirstOrDefault(v => v.VideoId == videoDetails.Id);
 
                 if (video == null)
                     continue;
