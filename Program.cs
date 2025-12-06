@@ -7,6 +7,8 @@ using MeTubeServer.Services;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Extensions.Http;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,19 +35,34 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<MeTubeDbContext>(options =>
     options.UseSqlite(connectionString));
 
-// Add HttpClient services with timeouts (#11)
+// Add HttpClient services with timeouts (#11) and circuit breaker (#15)
 var hubOptions = builder.Configuration.GetSection("Hub").Get<HubOptions>() ?? new HubOptions();
+
+// Circuit breaker policy: opens after 5 consecutive failures, stays open for 30 seconds
+var circuitBreakerPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .CircuitBreakerAsync(5, TimeSpan.FromSeconds(30));
+
+// Retry policy: retry 3 times with exponential backoff
+var retryPolicy = HttpPolicyExtensions
+    .HandleTransientHttpError()
+    .WaitAndRetryAsync(3, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)));
+
 builder.Services.AddHttpClient<YouTubeApiService>()
     .ConfigureHttpClient(client =>
     {
         client.Timeout = TimeSpan.FromSeconds(hubOptions.HttpClientTimeoutSeconds);
-    });
+    })
+    .AddPolicyHandler(retryPolicy)
+    .AddPolicyHandler(circuitBreakerPolicy);
 
 builder.Services.AddHttpClient<WebSubService>()
     .ConfigureHttpClient(client =>
     {
         client.Timeout = TimeSpan.FromSeconds(hubOptions.HttpClientTimeoutSeconds);
-    });
+    })
+    .AddPolicyHandler(retryPolicy)
+    .AddPolicyHandler(circuitBreakerPolicy);
 
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
@@ -60,6 +77,7 @@ builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
 builder.Services.AddHostedService<ReconciliationJob>();
+builder.Services.AddHostedService<ChannelCleanupJob>();
 
 // Add rate limiting (#3)
 builder.Services.AddRateLimiter(options =>
