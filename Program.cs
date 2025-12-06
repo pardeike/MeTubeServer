@@ -67,6 +67,7 @@ builder.Services.AddHttpClient<WebSubService>()
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
+builder.Services.AddSingleton<YouTubeQuotaTracker>();
 builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<HubOptions>>().Value;
