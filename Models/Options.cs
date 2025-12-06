@@ -60,4 +60,9 @@ public class HubOptions
     /// Shutdown timeout in seconds.
     /// </summary>
     public int ShutdownTimeoutSeconds { get; set; } = 30;
+    
+    /// <summary>
+    /// Background task queue capacity.
+    /// </summary>
+    public int BackgroundTaskQueueCapacity { get; set; } = 100;
 }
