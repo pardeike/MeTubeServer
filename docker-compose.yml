@@ -1,0 +1,12 @@
+services:
+  metubeserver:
+    build: .
+    ports:
+      - "5000:8080"
+    environment:
+      - YouTube__ApiKey=${YOUTUBE_API_KEY}
+      - YouTube__CallbackBaseUrl=${CALLBACK_BASE_URL}
+      - ConnectionStrings__DefaultConnection=Data Source=/app/data/metubeserver.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
