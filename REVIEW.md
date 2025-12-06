@@ -493,7 +493,7 @@ public async Task<bool> SubscribeAsync(string topicUrl, string hubSecret)
 
 ### 28. Program.cs Is Too Long
 
-**Issue**: Program.cs is 383 lines with all endpoints defined inline.
+**Issue**: Program.cs is 653 lines with all endpoints defined inline.
 
 **Problem**: Hard to navigate and maintain.
 
@@ -507,6 +507,8 @@ public static class WebSubEndpoints
     }
 }
 ```
+
+**Note**: While beneficial, this refactoring is substantial and should be done carefully to avoid breaking changes. Current implementation is well-organized with clear section comments.
 
 ### ✅ 29. No Defensive Copying
 
@@ -772,11 +774,13 @@ var since = channel.LastSeenPublishedAt?.AddHours(-1); // 1 hour overlap
 
 **Problem**: Users will struggle with configuration and deployment.
 
-**Solution**: Already exists in EXAMPLES.md, but could be expanded with:
+**Solution**: Comprehensive troubleshooting exists in EXAMPLES.md, but could be expanded with:
 - How to verify WebSub subscriptions are active
 - How to manually trigger reconciliation
 - How to check YouTube API quota usage
 - How to diagnose database lock issues
+
+**Note**: Basic troubleshooting exists in documentation. Further expansion should be based on actual user feedback and common issues encountered in production.
 
 ---
 
