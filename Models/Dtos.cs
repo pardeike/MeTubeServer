@@ -24,7 +24,7 @@ public class FeedResponse
     /// <summary>
     /// List of videos in the feed.
     /// </summary>
-    public List<VideoDto> Videos { get; set; } = new();
+    public IReadOnlyList<VideoDto> Videos { get; set; } = Array.Empty<VideoDto>();
     
     /// <summary>
     /// Cursor for fetching the next page of results. Use this as the 'since' parameter.
