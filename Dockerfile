@@ -14,11 +14,18 @@ RUN dotnet publish -c Release -o /app/publish
 FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
 
+# Create non-root user (#39)
+RUN adduser --disabled-password --gecos '' --uid 1000 appuser && \
+    chown -R appuser:appuser /app
+
 # Copy the published app
 COPY --from=build /app/publish .
 
 # Create a directory for the database
-RUN mkdir -p /app/data
+RUN mkdir -p /app/data && chown -R appuser:appuser /app/data
+
+# Switch to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8080
