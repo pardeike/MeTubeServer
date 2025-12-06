@@ -11,14 +11,17 @@ public class ChannelCleanupJob : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ChannelCleanupJob> _logger;
+    private readonly BackgroundJobHealthCheck _healthCheck;
     private readonly TimeSpan _interval = TimeSpan.FromHours(6);
 
     public ChannelCleanupJob(
         IServiceProvider serviceProvider,
-        ILogger<ChannelCleanupJob> logger)
+        ILogger<ChannelCleanupJob> logger,
+        BackgroundJobHealthCheck healthCheck)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _healthCheck = healthCheck;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -33,6 +36,7 @@ public class ChannelCleanupJob : BackgroundService
             try
             {
                 await CleanupOrphanedChannelsAsync(stoppingToken);
+                _healthCheck.RecordJobExecution(nameof(ChannelCleanupJob), _interval);
                 await Task.Delay(_interval, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -43,6 +47,7 @@ public class ChannelCleanupJob : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in channel cleanup job");
+                _healthCheck.RecordJobError(nameof(ChannelCleanupJob));
             }
         }
 

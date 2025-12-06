@@ -9,14 +9,17 @@ public class ReconciliationJob : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ReconciliationJob> _logger;
+    private readonly BackgroundJobHealthCheck _healthCheck;
     private readonly TimeSpan _interval = TimeSpan.FromMinutes(30);
 
     public ReconciliationJob(
         IServiceProvider serviceProvider,
-        ILogger<ReconciliationJob> logger)
+        ILogger<ReconciliationJob> logger,
+        BackgroundJobHealthCheck healthCheck)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _healthCheck = healthCheck;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -31,6 +34,7 @@ public class ReconciliationJob : BackgroundService
             try
             {
                 await ReconcileChannelsAsync(stoppingToken);
+                _healthCheck.RecordJobExecution(nameof(ReconciliationJob), _interval);
                 await Task.Delay(_interval, stoppingToken);
             }
             catch (OperationCanceledException)
@@ -41,6 +45,7 @@ public class ReconciliationJob : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in reconciliation job");
+                _healthCheck.RecordJobError(nameof(ReconciliationJob));
             }
         }
 

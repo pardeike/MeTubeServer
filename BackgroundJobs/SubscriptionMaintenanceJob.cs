@@ -8,15 +8,18 @@ public class SubscriptionMaintenanceJob : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<SubscriptionMaintenanceJob> _logger;
+    private readonly BackgroundJobHealthCheck _healthCheck;
     private readonly TimeSpan _interval = TimeSpan.FromHours(1);
     private readonly TimeSpan _safetyMargin = TimeSpan.FromDays(1);
 
     public SubscriptionMaintenanceJob(
         IServiceProvider serviceProvider,
-        ILogger<SubscriptionMaintenanceJob> logger)
+        ILogger<SubscriptionMaintenanceJob> logger,
+        BackgroundJobHealthCheck healthCheck)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _healthCheck = healthCheck;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,6 +32,7 @@ public class SubscriptionMaintenanceJob : BackgroundService
             {
                 await Task.Delay(_interval, stoppingToken);
                 await RenewSubscriptionsAsync(stoppingToken);
+                _healthCheck.RecordJobExecution(nameof(SubscriptionMaintenanceJob), _interval);
             }
             catch (OperationCanceledException)
             {
@@ -38,6 +42,7 @@ public class SubscriptionMaintenanceJob : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in subscription maintenance job");
+                _healthCheck.RecordJobError(nameof(SubscriptionMaintenanceJob));
             }
         }
 
