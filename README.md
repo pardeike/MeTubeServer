@@ -88,7 +88,7 @@ export YouTube__CallbackBaseUrl="https://your-ngrok-url.com"
 dotnet run
 ```
 
-### Docker (Coming Soon)
+### Docker
 
 ```bash
 docker build -t metubeserver .
@@ -96,6 +96,14 @@ docker run -p 5000:8080 \
   -e YouTube__ApiKey="YOUR_API_KEY" \
   -e YouTube__CallbackBaseUrl="https://your-domain.com" \
   metubeserver
+```
+
+Or use docker-compose (recommended):
+
+```bash
+cp .env.example .env
+# Edit .env with your values
+docker-compose up -d
 ```
 
 ### Cloudflare Tunnel (Home Server)

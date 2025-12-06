@@ -226,27 +226,41 @@ app.MapPost("/api/users/{appUserId}/channels", async (
 
             logger.LogInformation("Created new channel {ChannelId}", channelId);
 
-            // Subscribe to WebSub
+            // Subscribe to WebSub (fire and forget with error logging)
             _ = Task.Run(async () =>
             {
-                await webSubService.SubscribeAsync(topicUrl, hubSecret);
+                try
+                {
+                    await webSubService.SubscribeAsync(topicUrl, hubSecret);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
+                }
             });
 
-            // Fetch uploads playlist ID
+            // Fetch uploads playlist ID (fire and forget with error logging)
             _ = Task.Run(async () =>
             {
-                var uploadsPlaylistId = await youtubeApi.GetUploadsPlaylistIdAsync(channelId);
-                if (!string.IsNullOrEmpty(uploadsPlaylistId))
+                try
                 {
-                    using var scope = app.Services.CreateScope();
-                    var dbContext = scope.ServiceProvider.GetRequiredService<MeTubeDbContext>();
-                    var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId);
-                    if (ch != null)
+                    var uploadsPlaylistId = await youtubeApi.GetUploadsPlaylistIdAsync(channelId);
+                    if (!string.IsNullOrEmpty(uploadsPlaylistId))
                     {
-                        ch.UploadsPlaylistId = uploadsPlaylistId;
-                        await dbContext.SaveChangesAsync();
-                        logger.LogInformation("Updated uploads playlist ID for channel {ChannelId}", channelId);
+                        using var scope = app.Services.CreateScope();
+                        var dbContext = scope.ServiceProvider.GetRequiredService<MeTubeDbContext>();
+                        var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId);
+                        if (ch != null)
+                        {
+                            ch.UploadsPlaylistId = uploadsPlaylistId;
+                            await dbContext.SaveChangesAsync();
+                            logger.LogInformation("Updated uploads playlist ID for channel {ChannelId}", channelId);
+                        }
                     }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error fetching uploads playlist ID for channel {ChannelId}", channelId);
                 }
             });
         }
