@@ -1,8 +1,12 @@
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using MeTubeServer.BackgroundJobs;
 using MeTubeServer.Data;
 using MeTubeServer.Models;
 using MeTubeServer.Services;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,33 +14,127 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<YouTubeOptions>(builder.Configuration.GetSection("YouTube"));
 builder.Services.Configure<HubOptions>(builder.Configuration.GetSection("Hub"));
 
+// Configure shutdown timeout (#36)
+builder.Services.Configure<HostOptions>(options =>
+{
+    var hubOptions = builder.Configuration.GetSection("Hub").Get<HubOptions>() ?? new HubOptions();
+    options.ShutdownTimeout = TimeSpan.FromSeconds(hubOptions.ShutdownTimeoutSeconds);
+});
+
+// Configure request body size limits (#31)
+builder.Services.Configure<KestrelServerOptions>(options =>
+{
+    var hubOptions = builder.Configuration.GetSection("Hub").Get<HubOptions>() ?? new HubOptions();
+    options.Limits.MaxRequestBodySize = hubOptions.MaxRequestBodySize;
+});
+
 // Add database context
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<MeTubeDbContext>(options =>
     options.UseSqlite(connectionString));
 
-// Add HttpClient services
-builder.Services.AddHttpClient<YouTubeApiService>();
-builder.Services.AddHttpClient<WebSubService>();
+// Add HttpClient services with timeouts (#11)
+var hubOptions = builder.Configuration.GetSection("Hub").Get<HubOptions>() ?? new HubOptions();
+builder.Services.AddHttpClient<YouTubeApiService>()
+    .ConfigureHttpClient(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(hubOptions.HttpClientTimeoutSeconds);
+    });
+
+builder.Services.AddHttpClient<WebSubService>()
+    .ConfigureHttpClient(client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(hubOptions.HttpClientTimeoutSeconds);
+    });
 
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
+builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
 
 // Add background jobs
+builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
 builder.Services.AddHostedService<ReconciliationJob>();
+
+// Add rate limiting (#3)
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    
+    // Global rate limit per IP
+    options.AddFixedWindowLimiter("fixed", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 100;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 10;
+    });
+    
+    // WebSub endpoint rate limit (more restrictive)
+    options.AddFixedWindowLimiter("websub", limiterOptions =>
+    {
+        limiterOptions.PermitLimit = 50;
+        limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+        limiterOptions.QueueLimit = 5;
+    });
+});
 
 // Add OpenAPI/Swagger
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Ensure database is created
+// Initialize database and validate configuration
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<MeTubeDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    var youtubeOptions = scope.ServiceProvider.GetRequiredService<IOptions<YouTubeOptions>>().Value;
+    var youtubeService = scope.ServiceProvider.GetRequiredService<YouTubeApiService>();
+    
+    // Create/migrate database (#38)
+    try
+    {
+        await db.Database.EnsureCreatedAsync();
+        logger.LogInformation("Database initialized successfully");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to initialize database");
+        throw;
+    }
+    
+    // Validate YouTube API key (#2)
+    try
+    {
+        var isValid = await youtubeService.ValidateApiKeyAsync();
+        if (!isValid)
+        {
+            logger.LogError("YouTube API key validation failed. Please check your configuration");
+            throw new InvalidOperationException("Invalid YouTube API key");
+        }
+    }
+    catch (Exception ex) when (ex is not InvalidOperationException)
+    {
+        logger.LogWarning(ex, "Could not validate YouTube API key at startup. Continuing anyway");
+    }
+    
+    // Validate WebSub callback URL (#8)
+    if (!youtubeOptions.CallbackBaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+    {
+        logger.LogWarning("CallbackBaseUrl should use HTTPS for WebSub to work properly: {CallbackBaseUrl}", 
+            youtubeOptions.CallbackBaseUrl);
+    }
+    
+    if (string.IsNullOrWhiteSpace(youtubeOptions.CallbackBaseUrl))
+    {
+        logger.LogError("CallbackBaseUrl is not configured. WebSub will not work");
+    }
 }
+
+// Use rate limiting middleware
+app.UseRateLimiter();
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -129,7 +227,18 @@ app.MapPost("/websub/youtube", async (
     using var reader = new StreamReader(context.Request.Body);
     var body = await reader.ReadToEndAsync();
 
-    logger.LogInformation("Received WebSub notification, body length: {Length}", body.Length);
+    logger.LogDebug("Received WebSub notification, body length: {Length}", body.Length);
+
+    // Parse the Atom feed once (#4 - Fix double parsing)
+    var atomEntries = atomParser.ParseFeed(body);
+    
+    if (atomEntries.Count == 0)
+    {
+        logger.LogWarning("No entries found in Atom feed");
+        return Results.Ok();
+    }
+    
+    logger.LogDebug("Parsed {Count} entries from Atom feed", atomEntries.Count);
 
     // Verify HMAC if signature is present
     var signature = context.Request.Headers["X-Hub-Signature"].ToString();
@@ -138,31 +247,22 @@ app.MapPost("/websub/youtube", async (
         signature = context.Request.Headers["X-Hub-Signature-256"].ToString();
     }
 
-    if (!string.IsNullOrEmpty(signature))
+    if (!string.IsNullOrEmpty(signature) && atomEntries.Count > 0)
     {
-        // We need to find the channel to get the secret
-        // Parse the feed first to get channelId
-        var entries = atomParser.ParseFeed(body);
-        if (entries.Count > 0)
-        {
-            var channelIdFromFeed = entries[0].ChannelId;
-            var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelIdFromFeed);
+        // Get the channel from the first entry
+        var channelIdFromFeed = atomEntries[0].ChannelId;
+        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelIdFromFeed);
 
-            if (channel != null && !string.IsNullOrEmpty(channel.HubSecret))
+        if (channel != null && !string.IsNullOrEmpty(channel.HubSecret))
+        {
+            if (!webSubService.VerifySignature(body, signature, channel.HubSecret))
             {
-                if (!webSubService.VerifySignature(body, signature, channel.HubSecret))
-                {
-                    logger.LogWarning("HMAC verification failed for channel {ChannelId}", channelIdFromFeed);
-                    return Results.Unauthorized();
-                }
-                logger.LogInformation("HMAC verified successfully for channel {ChannelId}", channelIdFromFeed);
+                logger.LogWarning("HMAC verification failed for channel {ChannelId}", channelIdFromFeed);
+                return Results.Unauthorized();
             }
+            logger.LogDebug("HMAC verified successfully for channel {ChannelId}", channelIdFromFeed);
         }
     }
-
-    // Parse the Atom feed
-    var atomEntries = atomParser.ParseFeed(body);
-    logger.LogInformation("Parsed {Count} entries from Atom feed", atomEntries.Count);
 
     foreach (var entry in atomEntries)
     {
@@ -181,14 +281,14 @@ app.MapPost("/websub/youtube", async (
 
         if (existingVideo != null)
         {
-            logger.LogInformation("Video {VideoId} already exists, skipping", entry.VideoId);
+            logger.LogDebug("Video {VideoId} already exists, skipping", entry.VideoId);
             continue;
         }
 
         // Check if this is older than what we've already seen
         if (channel.LastSeenPublishedAt.HasValue && entry.PublishedAt <= channel.LastSeenPublishedAt.Value)
         {
-            logger.LogInformation("Video {VideoId} is older than last seen, skipping", entry.VideoId);
+            logger.LogDebug("Video {VideoId} is older than last seen, skipping", entry.VideoId);
             continue;
         }
 
@@ -216,7 +316,8 @@ app.MapPost("/websub/youtube", async (
 
     return Results.Ok();
 })
-.WithName("WebSubNotification");
+.WithName("WebSubNotification")
+.RequireRateLimiting("websub");
 
 // App Integration Endpoints
 app.MapPost("/api/users/{appUserId}/channels", async (
@@ -225,113 +326,169 @@ app.MapPost("/api/users/{appUserId}/channels", async (
     MeTubeDbContext db,
     WebSubService webSubService,
     YouTubeApiService youtubeApi,
+    IBackgroundTaskQueue taskQueue,
     ILogger<Program> logger) =>
 {
-    logger.LogInformation("Registering channels for user {UserId}: {Count} channels",
-        appUserId, request.ChannelIds.Count);
+    // Deduplicate channel IDs (#20)
+    var uniqueChannelIds = request.ChannelIds.Distinct().ToList();
+    
+    logger.LogInformation("Registering {Count} unique channels for user {UserId}",
+        uniqueChannelIds.Count, appUserId);
 
-    // Upsert user
-    var user = await db.Users.FirstOrDefaultAsync(u => u.AppUserId == appUserId);
-    if (user == null)
+    // Use transaction for data consistency (#5)
+    using var transaction = await db.Database.BeginTransactionAsync();
+    try
     {
-        user = new User { AppUserId = appUserId };
-        db.Users.Add(user);
-        await db.SaveChangesAsync();
-    }
-
-    foreach (var channelId in request.ChannelIds)
-    {
-        // Check if channel exists
-        var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId);
-
-        if (channel == null)
+        // Upsert user
+        var user = await db.Users.FirstOrDefaultAsync(u => u.AppUserId == appUserId);
+        if (user == null)
         {
-            // Create new channel
-            var topicUrl = $"https://www.youtube.com/feeds/videos.xml?channel_id={channelId}";
-            var hubSecret = webSubService.GenerateHubSecret();
-
-            channel = new Channel
-            {
-                ChannelId = channelId,
-                TopicUrl = topicUrl,
-                HubSecret = hubSecret
-            };
-
-            db.Channels.Add(channel);
+            user = new User { AppUserId = appUserId };
+            db.Users.Add(user);
             await db.SaveChangesAsync();
+        }
 
-            logger.LogInformation("Created new channel {ChannelId}", channelId);
-
-            // Subscribe to WebSub (fire and forget with error logging)
-            _ = Task.Run(async () =>
+        // Batch fetch uploads playlist IDs for new channels (#40)
+        var existingChannelIds = await db.Channels
+            .Where(c => uniqueChannelIds.Contains(c.ChannelId))
+            .Select(c => c.ChannelId)
+            .ToListAsync();
+        
+        var newChannelIds = uniqueChannelIds.Except(existingChannelIds).ToList();
+        
+        if (newChannelIds.Count > 0)
+        {
+            logger.LogInformation("Creating {Count} new channels", newChannelIds.Count);
+            
+            // Create new channels first
+            var newChannels = new List<Channel>();
+            foreach (var channelId in newChannelIds)
             {
-                try
-                {
-                    await webSubService.SubscribeAsync(topicUrl, hubSecret);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
-                }
-            });
+                var topicUrl = $"https://www.youtube.com/feeds/videos.xml?channel_id={channelId}";
+                var hubSecret = webSubService.GenerateHubSecret();
 
-            // Fetch uploads playlist ID (fire and forget with error logging)
-            _ = Task.Run(async () =>
-            {
-                try
+                var channel = new Channel
                 {
-                    var uploadsPlaylistId = await youtubeApi.GetUploadsPlaylistIdAsync(channelId);
-                    if (!string.IsNullOrEmpty(uploadsPlaylistId))
+                    ChannelId = channelId,
+                    TopicUrl = topicUrl,
+                    HubSecret = hubSecret
+                };
+
+                db.Channels.Add(channel);
+                newChannels.Add(channel);
+            }
+            
+            await db.SaveChangesAsync();
+            
+            // Queue background tasks for WebSub and metadata (#1)
+            foreach (var channel in newChannels)
+            {
+                var channelId = channel.ChannelId;
+                var topicUrl = channel.TopicUrl;
+                var hubSecret = channel.HubSecret ?? string.Empty;
+                
+                // Queue WebSub subscription
+                await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                {
+                    var webSub = sp.GetRequiredService<WebSubService>();
+                    var log = sp.GetRequiredService<ILogger<Program>>();
+                    try
                     {
-                        using var scope = app.Services.CreateScope();
-                        var dbContext = scope.ServiceProvider.GetRequiredService<MeTubeDbContext>();
-                        var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId);
+                        await webSub.SubscribeAsync(topicUrl, hubSecret, ct);
+                        log.LogInformation("Subscribed to WebSub for channel {ChannelId}", channelId);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
+                    }
+                });
+                
+                // Queue uploads playlist and metadata fetch
+                await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                {
+                    var ytApi = sp.GetRequiredService<YouTubeApiService>();
+                    var dbContext = sp.GetRequiredService<MeTubeDbContext>();
+                    var log = sp.GetRequiredService<ILogger<Program>>();
+                    try
+                    {
+                        var uploadsPlaylistId = await ytApi.GetUploadsPlaylistIdAsync(channelId, ct);
+                        var metadata = await ytApi.GetChannelMetadataAsync(channelId, ct);
+                        
+                        var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId, ct);
                         if (ch != null)
                         {
                             ch.UploadsPlaylistId = uploadsPlaylistId;
-                            await dbContext.SaveChangesAsync();
-                            logger.LogInformation("Updated uploads playlist ID for channel {ChannelId}", channelId);
+                            if (metadata != null)
+                            {
+                                ch.ChannelName = metadata.Title;
+                                ch.ChannelThumbnailUrl = metadata.ThumbnailUrl;
+                                ch.MetadataLastUpdated = DateTimeOffset.UtcNow;
+                            }
+                            await dbContext.SaveChangesAsync(ct);
+                            log.LogInformation("Updated metadata for channel {ChannelId}", channelId);
                         }
                     }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Error fetching uploads playlist ID for channel {ChannelId}", channelId);
-                }
-            });
+                    catch (Exception ex)
+                    {
+                        log.LogError(ex, "Error fetching metadata for channel {ChannelId}", channelId);
+                    }
+                });
+            }
         }
 
-        // Upsert UserChannel
-        var userChannel = await db.UserChannels
-            .FirstOrDefaultAsync(uc => uc.UserId == user.Id && uc.ChannelId == channel.Id);
-
-        if (userChannel == null)
+        // Link user to all channels
+        var allChannels = await db.Channels
+            .Where(c => uniqueChannelIds.Contains(c.ChannelId))
+            .ToListAsync();
+        
+        foreach (var channel in allChannels)
         {
-            userChannel = new UserChannel
+            var userChannel = await db.UserChannels
+                .FirstOrDefaultAsync(uc => uc.UserId == user.Id && uc.ChannelId == channel.Id);
+
+            if (userChannel == null)
             {
-                UserId = user.Id,
-                ChannelId = channel.Id
-            };
-            db.UserChannels.Add(userChannel);
-            logger.LogInformation("Linked user {UserId} to channel {ChannelId}", appUserId, channelId);
+                userChannel = new UserChannel
+                {
+                    UserId = user.Id,
+                    ChannelId = channel.Id
+                };
+                db.UserChannels.Add(userChannel);
+            }
         }
+
+        await db.SaveChangesAsync();
+        await transaction.CommitAsync();
+
+        logger.LogInformation("Successfully registered channels for user {UserId}", appUserId);
+        return Results.Ok(new { message = "Channels registered successfully" });
     }
-
-    await db.SaveChangesAsync();
-
-    return Results.Ok(new { message = "Channels registered successfully" });
+    catch (Exception ex)
+    {
+        await transaction.RollbackAsync();
+        logger.LogError(ex, "Error registering channels for user {UserId}", appUserId);
+        return Results.Problem("Failed to register channels");
+    }
 })
-.WithName("RegisterChannels");
+.WithName("RegisterChannels")
+.RequireRateLimiting("fixed");
 
 app.MapGet("/api/users/{appUserId}/feed", async (
     string appUserId,
     MeTubeDbContext db,
+    IOptions<HubOptions> options,
     string? since = null,
-    int limit = 50) =>
+    int? limit = null) =>
 {
+    var hubOptions = options.Value;
+    
+    // Apply default and max limits (#24)
+    var effectiveLimit = limit ?? hubOptions.DefaultFeedLimit;
+    if (effectiveLimit > hubOptions.MaxFeedLimit)
+        effectiveLimit = hubOptions.MaxFeedLimit;
+
     var user = await db.Users
         .Include(u => u.UserChannels)
-        .ThenInclude(uc => uc.Channel)
         .FirstOrDefaultAsync(u => u.AppUserId == appUserId);
 
     if (user == null)
@@ -340,6 +497,11 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     }
 
     var channelIds = user.UserChannels.Select(uc => uc.ChannelId).ToList();
+    
+    if (channelIds.Count == 0)
+    {
+        return Results.Ok(new FeedResponse { Videos = new List<VideoDto>(), NextCursor = null });
+    }
 
     DateTimeOffset? sinceDate = null;
     if (!string.IsNullOrEmpty(since) && DateTimeOffset.TryParse(since, out var parsedDate))
@@ -347,8 +509,8 @@ app.MapGet("/api/users/{appUserId}/feed", async (
         sinceDate = parsedDate;
     }
 
+    // Fix N+1 pattern by projecting directly to DTO (#33)
     var query = db.Videos
-        .Include(v => v.Channel)
         .Where(v => channelIds.Contains(v.ChannelId));
 
     if (sinceDate.HasValue)
@@ -358,12 +520,8 @@ app.MapGet("/api/users/{appUserId}/feed", async (
 
     var videos = await query
         .OrderByDescending(v => v.PublishedAt)
-        .Take(limit)
-        .ToListAsync();
-
-    var response = new FeedResponse
-    {
-        Videos = videos.Select(v => new VideoDto
+        .Take(effectiveLimit + 1) // Fetch one extra to determine if there are more results
+        .Select(v => new VideoDto
         {
             VideoId = v.VideoId,
             ChannelId = v.Channel.ChannelId,
@@ -372,11 +530,27 @@ app.MapGet("/api/users/{appUserId}/feed", async (
             Description = v.Description,
             ThumbnailUrl = v.ThumbnailUrl,
             Duration = v.Duration
-        }).ToList()
+        })
+        .ToListAsync();
+
+    // Implement pagination (#13)
+    string? nextCursor = null;
+    if (videos.Count > effectiveLimit)
+    {
+        // There are more results
+        nextCursor = videos[effectiveLimit - 1].PublishedAt.ToString("O");
+        videos = videos.Take(effectiveLimit).ToList();
+    }
+
+    var response = new FeedResponse
+    {
+        Videos = videos,
+        NextCursor = nextCursor
     };
 
     return Results.Ok(response);
 })
-.WithName("GetUserFeed");
+.WithName("GetUserFeed")
+.RequireRateLimiting("fixed");
 
 app.Run();
