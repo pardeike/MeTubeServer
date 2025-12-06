@@ -326,7 +326,7 @@ foreach (var channel in channels)
 }
 ```
 
-### 18. No Metrics or Observability
+### ✅ 18. No Metrics or Observability
 
 **Issue**: No metrics collection for monitoring (e.g., WebSub notifications received, API calls made, videos processed).
 
@@ -557,7 +557,7 @@ builder.Services.Configure<KestrelServerOptions>(options =>
 });
 ```
 
-### 32. Missing CORS Configuration
+### ✅ 32. Missing CORS Configuration
 
 **Issue**: If the API needs to be called from web browsers, CORS is not configured.
 
@@ -576,7 +576,7 @@ builder.Services.AddCors(options =>
 });
 ```
 
-**Note**: Check if this is needed based on MeTube app architecture.
+**Note**: CORS support added with configurable origins via appsettings.
 
 ---
 
