@@ -2,7 +2,7 @@
 
 ## Progress Tracking
 
-This document contains comprehensive feedback for the MeTube Hub Server. As items are addressed, they are marked with ✅ in their respective sections.
+This document contains comprehensive feedback for the MeTube Hub Server. As items are addressed, they are marked with ✅ in their respective sections. Items marked with ❌ shall be ignored for now.
 
 **Excluded Topics** (not being addressed in current work):
 - #7: No Cleanup of Old Videos
@@ -140,7 +140,7 @@ _backgroundQueue.QueueVideoEnrichment(video.VideoId);
 
 **Note**: The ReconciliationJob gets thumbnails from playlistItems, but WebSub path doesn't.
 
-### 7. No Cleanup of Old Videos
+### ❌ 7. No Cleanup of Old Videos
 
 **Issue**: Videos accumulate indefinitely in the database. No TTL or cleanup mechanism.
 
@@ -340,7 +340,7 @@ private static readonly Counter<long> _websubNotificationsReceived =
 _websubNotificationsReceived.Add(1, new("channel", channelId));
 ```
 
-### 19. SQLite WAL Mode Not Optimal for Concurrent Writes
+### ❌ 19. SQLite WAL Mode Not Optimal for Concurrent Writes
 
 **Issue**: SQLite is configured with default settings. Under concurrent load, write performance degrades.
 
@@ -407,7 +407,7 @@ private void RecordQuotaUsage(int units)
 }
 ```
 
-### 23. Reconciliation Job Doesn't Handle Deleted Videos
+### ❌ 23. Reconciliation Job Doesn't Handle Deleted Videos
 
 **Issue**: If YouTube deletes a video, it stays in our database forever.
 
@@ -435,7 +435,7 @@ public class HubOptions
 }
 ```
 
-### 25. Lack of Unit Tests
+### ❌ 25. Lack of Unit Tests
 
 **Issue**: No tests for services, parsers, or business logic.
 
@@ -756,7 +756,7 @@ var since = channel.LastSeenPublishedAt?.AddHours(-1); // 1 hour overlap
 
 ## Documentation Issues
 
-### 43. EXAMPLES.md Has Untested Code Samples
+### ❌ 43. EXAMPLES.md Has Untested Code Samples
 
 **Issue**: Swift code examples in EXAMPLES.md are not validated.
 
@@ -805,27 +805,6 @@ var since = channel.LastSeenPublishedAt?.AddHours(-1); // 1 hour overlap
 3. Implement circuit breakers and retry policies
 4. Add admin dashboard
 5. Support for channel metadata caching
-
----
-
-## Code Review Checklist
-
-Before merging to production:
-
-- [ ] All critical issues addressed
-- [ ] Rate limiting implemented
-- [ ] Transactions added for multi-step operations
-- [ ] Background task queue implemented
-- [ ] API key validated on startup
-- [ ] Input validation added
-- [ ] Video metadata enrichment working
-- [ ] Error handling reviewed
-- [ ] Logging levels appropriate
-- [ ] Security review completed
-- [ ] Performance testing done
-- [ ] Documentation updated
-- [ ] Docker image tested
-- [ ] Database migrations strategy defined
 
 ---
 
