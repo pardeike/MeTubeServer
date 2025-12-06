@@ -95,6 +95,7 @@ curl "http://localhost:5000/api/users/user123/feed?limit=10"
       "duration": "00:04:13"
     }
   ],
+  "nextCursor": null,
   "nextPageToken": null
 }
 ```

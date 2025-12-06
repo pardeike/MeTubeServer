@@ -684,7 +684,7 @@ Update Program.cs:
 await db.Database.MigrateAsync();
 ```
 
-### 39. Dockerfile Doesn't Run as Non-Root
+### ✅ 39. Dockerfile Doesn't Run as Non-Root
 
 **Issue**: Docker container runs as root user.
 

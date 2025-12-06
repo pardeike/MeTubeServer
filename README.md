@@ -24,7 +24,12 @@ YouTube → WebSub Hub → MeTube Hub Server → MeTube App
 - **Automatic Subscription Management**: Maintains WebSub subscriptions with lease renewal
 - **Reconciliation**: Periodic polling to backfill missed notifications
 - **Multi-user Support**: One WebSub subscription per channel, shared across users
-- **HMAC Security**: Verifies WebSub notifications with shared secrets
+- **HMAC Security**: Verifies WebSub notifications with constant-time comparison
+- **Rate Limiting**: Built-in protection against abuse
+- **Background Task Queue**: Reliable async operations with proper scope management
+- **Transaction Support**: Database consistency for multi-step operations
+- **Pagination**: Efficient feed pagination with cursor support
+- **Channel Metadata**: Stores channel names and thumbnails
 
 ## Technology Stack
 
@@ -54,10 +59,25 @@ YouTube → WebSub Hub → MeTube Hub Server → MeTube App
     "CallbackBaseUrl": "https://your-server-url.com"
   },
   "Hub": {
-    "WebSubSharedSecretLength": 32
+    "WebSubSharedSecretLength": 32,
+    "DefaultFeedLimit": 50,
+    "MaxFeedLimit": 100,
+    "ReconciliationMaxResults": 20,
+    "MaxRequestBodySize": 1048576,
+    "HttpClientTimeoutSeconds": 30,
+    "ShutdownTimeoutSeconds": 30
   }
 }
 ```
+
+**Hub Configuration Options:**
+- `WebSubSharedSecretLength`: Length of generated WebSub secrets (default: 32)
+- `DefaultFeedLimit`: Default number of videos in feed response (default: 50)
+- `MaxFeedLimit`: Maximum allowed feed limit (default: 100)
+- `ReconciliationMaxResults`: Max results per reconciliation job (default: 20)
+- `MaxRequestBodySize`: Maximum request body size in bytes (default: 1 MB)
+- `HttpClientTimeoutSeconds`: HTTP client timeout (default: 30)
+- `ShutdownTimeoutSeconds`: Graceful shutdown timeout (default: 30)
 
 ### Environment Variables
 
@@ -192,7 +212,7 @@ Get the user's aggregated video feed.
 
 **Query Parameters:**
 - `since` (optional) - ISO 8601 timestamp, returns videos published after this time
-- `limit` (optional, default: 50) - Maximum number of videos to return
+- `limit` (optional, default: 50, max: 100) - Maximum number of videos to return
 
 **Response:**
 ```json
@@ -208,9 +228,12 @@ Get the user's aggregated video feed.
       "duration": "00:04:13"
     }
   ],
+  "nextCursor": "2025-12-06T11:00:00Z",
   "nextPageToken": null
 }
 ```
+
+**Note:** Use `nextCursor` for pagination. If present, pass it as the `since` parameter to get the next page.
 
 ## Data Model
 
@@ -307,10 +330,14 @@ Log levels can be configured in `appsettings.json`.
 
 ## Security
 
-- **HMAC Verification**: All WebSub notifications are verified using HMAC-SHA1/SHA256
+- **HMAC Verification**: All WebSub notifications are verified using HMAC-SHA1/SHA256 with constant-time comparison
 - **No User Credentials**: Server never stores user OAuth tokens
 - **Public Endpoint**: Only public YouTube data is cached
-- **Rate Limiting**: Consider adding rate limiting for production use
+- **Rate Limiting**: Built-in rate limiting protects against abuse:
+  - General API endpoints: 100 requests per minute per IP
+  - WebSub endpoint: 50 requests per minute per IP
+- **Request Size Limits**: Request bodies are limited to 1 MB by default
+- **Input Validation**: Request payloads are validated for correctness
 
 ## Troubleshooting
 

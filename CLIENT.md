@@ -302,15 +302,19 @@ GET /api/users/{userId}/feed?since={ISO8601}&limit={number}
     },
     ...
   ],
+  "nextCursor": "2025-12-06T10:00:00Z",
   "nextPageToken": null
 }
 ```
+
+**Note**: `nextCursor` is the new pagination field. Use it as the `since` parameter for the next request. `nextPageToken` is deprecated but kept for backwards compatibility.
 
 **Swift Implementation**:
 ```swift
 struct FeedResponse: Codable {
     let videos: [VideoDTO]
-    let nextPageToken: String?
+    let nextCursor: String?
+    let nextPageToken: String? // Deprecated, use nextCursor
 }
 
 struct VideoDTO: Codable {
@@ -398,20 +402,21 @@ func fetchFeed(userId: String, since: Date? = nil, limit: Int = 50) async throws
 ```swift
 func fetchAllNewVideos(userId: String, since: Date) async throws -> [VideoDTO] {
     var allVideos: [VideoDTO] = []
-    var currentSince = since
+    var currentSince: Date? = since
     
     while true {
         let feed = try await fetchFeed(userId: userId, since: currentSince, limit: 100)
         allVideos.append(contentsOf: feed.videos)
         
-        // If we got less than limit, we've reached the end
-        if feed.videos.count < 100 {
+        // Check if there's a next cursor for more results
+        guard let nextCursor = feed.nextCursor else {
+            // No more results
             break
         }
         
-        // Update since to the oldest video we just fetched
-        if let oldest = feed.videos.last {
-            currentSince = oldest.publishedAt
+        // Parse the cursor as ISO 8601 date for next request
+        if let cursorDate = ISO8601DateFormatter().date(from: nextCursor) {
+            currentSince = cursorDate
         } else {
             break
         }
@@ -421,7 +426,7 @@ func fetchAllNewVideos(userId: String, since: Date) async throws -> [VideoDTO] {
 }
 ```
 
-**Note**: Current implementation doesn't have true pagination tokens, so this uses timestamp-based pagination.
+**Note**: The server now provides proper pagination via `nextCursor`. Use this cursor as the `since` parameter for the next request to fetch the next page of results.
 
 ---
 
