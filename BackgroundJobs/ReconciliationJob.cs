@@ -61,6 +61,9 @@ public class ReconciliationJob : BackgroundService
 
         foreach (var channel in channels)
         {
+            // Check for cancellation before processing each channel
+            cancellationToken.ThrowIfCancellationRequested();
+            
             try
             {
                 await ReconcileChannelAsync(channel, dbContext, youtubeApi, cancellationToken);
@@ -81,8 +84,8 @@ public class ReconciliationJob : BackgroundService
         if (string.IsNullOrEmpty(channel.UploadsPlaylistId))
             return;
 
-        // Add a small overlap to account for clock skew
-        var since = channel.LastSeenPublishedAt?.AddMinutes(-5);
+        // Add 1 hour overlap to account for clock skew and missing videos (#42)
+        var since = channel.LastSeenPublishedAt?.AddHours(-1);
 
         var items = await youtubeApi.GetPlaylistItemsAsync(
             channel.UploadsPlaylistId,
@@ -97,6 +100,9 @@ public class ReconciliationJob : BackgroundService
 
         foreach (var item in items)
         {
+            // Check for cancellation within inner loop
+            cancellationToken.ThrowIfCancellationRequested();
+            
             var videoId = item.ContentDetails?.VideoId ?? item.Snippet?.ResourceId?.VideoId;
             if (string.IsNullOrEmpty(videoId))
                 continue;

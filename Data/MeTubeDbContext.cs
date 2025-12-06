@@ -24,6 +24,7 @@ public class MeTubeDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.ChannelId).IsUnique();
             entity.HasIndex(e => e.TopicUrl).IsUnique();
+            entity.HasIndex(e => e.LeaseExpiresAt).HasDatabaseName("IX_Channels_LeaseExpiresAt");
             entity.Property(e => e.ChannelId).IsRequired();
             entity.Property(e => e.TopicUrl).IsRequired();
         });
@@ -40,6 +41,8 @@ public class MeTubeDbContext : DbContext
         modelBuilder.Entity<UserChannel>(entity =>
         {
             entity.HasKey(e => new { e.UserId, e.ChannelId });
+            entity.HasIndex(e => new { e.UserId, e.ChannelId })
+                .HasDatabaseName("IX_UserChannels_User_Channel");
             entity.HasOne(e => e.User)
                 .WithMany(u => u.UserChannels)
                 .HasForeignKey(e => e.UserId);
@@ -53,6 +56,8 @@ public class MeTubeDbContext : DbContext
         {
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.VideoId).IsUnique();
+            entity.HasIndex(e => new { e.ChannelId, e.PublishedAt })
+                .HasDatabaseName("IX_Videos_Channel_Published");
             entity.Property(e => e.VideoId).IsRequired();
             entity.Property(e => e.PublishedAt).IsRequired();
             entity.HasOne(e => e.Channel)

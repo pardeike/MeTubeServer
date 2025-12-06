@@ -1,5 +1,15 @@
 # MeTube Hub Server - Comprehensive Review
 
+## Progress Tracking
+
+This document contains comprehensive feedback for the MeTube Hub Server. As items are addressed, they are marked with ✅ in their respective sections.
+
+**Excluded Topics** (not being addressed in current work):
+- #7: No Cleanup of Old Videos
+- #19: SQLite WAL Mode Not Optimal for Concurrent Writes
+- #23: Reconciliation Job Doesn't Handle Deleted Videos
+- #25: Lack of Unit Tests
+
 ## Executive Summary
 
 This document provides a comprehensive analysis of the MeTube Hub Server implementation, identifying potential issues, improvements, and code quality concerns. The goal is to ensure a solid, production-ready release with no surprises.
@@ -183,7 +193,7 @@ foreach (var channel in orphanedChannels)
 }
 ```
 
-### 10. Database Queries Missing Indexes
+### ✅ 10. Database Queries Missing Indexes
 
 **Issue**: Common query patterns may not have optimal indexes.
 
@@ -301,7 +311,7 @@ catch (Exception ex)
 }
 ```
 
-### 17. Background Jobs Don't Handle Shutdown Gracefully
+### ✅ 17. Background Jobs Don't Handle Shutdown Gracefully
 
 **Issue**: SubscriptionMaintenanceJob and ReconciliationJob may be interrupted mid-operation during shutdown.
 
@@ -409,7 +419,7 @@ private void RecordQuotaUsage(int units)
 
 ## Code Quality Issues
 
-### 24. Magic Numbers and Strings
+### ✅ 24. Magic Numbers and Strings
 
 **Issue**: Hard-coded values throughout the code (e.g., `limit = 50`, `maxResults = 20`).
 
@@ -511,7 +521,7 @@ public IReadOnlyList<VideoDto> Videos { get; set; } = Array.Empty<VideoDto>();
 
 ## Security Considerations
 
-### 30. HMAC Timing Attack Vulnerability
+### ✅ 30. HMAC Timing Attack Vulnerability
 
 **Issue**: HMAC comparison in VerifySignature uses string equality (`==`), which is vulnerable to timing attacks.
 
@@ -731,7 +741,7 @@ public class Channel
 
 Fetch from YouTube and periodically refresh.
 
-### 42. Reconciliation May Miss Updates
+### ✅ 42. Reconciliation May Miss Updates
 
 **Issue**: Reconciliation uses `LastSeenPublishedAt` but YouTube API returns results in any order.
 

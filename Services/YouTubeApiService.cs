@@ -40,6 +40,136 @@ public class YouTubeApiService
         }
     }
 
+    /// <summary>
+    /// Validates that the YouTube API key is working by making a simple API call.
+    /// </summary>
+    /// <returns>True if API key is valid, false otherwise.</returns>
+    public async Task<bool> ValidateApiKeyAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            // Make a minimal API call to validate the key
+            // Using the search endpoint with a simple query
+            var response = await _httpClient.GetAsync(
+                $"search?part=snippet&maxResults=1&type=video&q=test&key={_apiKey}",
+                cancellationToken);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("YouTube API key validated successfully");
+                return true;
+            }
+            else
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                _logger.LogError("YouTube API key validation failed. Status: {StatusCode}, Body: {Body}",
+                    response.StatusCode, body);
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error validating YouTube API key");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gets uploads playlist IDs for multiple channels in batched API calls (up to 50 channels per request).
+    /// </summary>
+    /// <param name="channelIds">List of channel IDs to fetch.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Dictionary mapping channel IDs to uploads playlist IDs.</returns>
+    public async Task<Dictionary<string, string>> GetUploadsPlaylistIdsBatchAsync(
+        List<string> channelIds,
+        CancellationToken cancellationToken = default)
+    {
+        var results = new Dictionary<string, string>();
+        
+        if (channelIds == null || channelIds.Count == 0)
+            return results;
+
+        try
+        {
+            // YouTube API allows up to 50 channel IDs per request
+            var batches = channelIds.Chunk(50);
+
+            foreach (var batch in batches)
+            {
+                var ids = string.Join(",", batch);
+                var response = await _httpClient.GetAsync(
+                    $"channels?part=contentDetails,snippet&id={ids}&key={_apiKey}",
+                    cancellationToken);
+
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync(cancellationToken);
+                var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
+
+                if (result?.Items != null)
+                {
+                    foreach (var item in result.Items)
+                    {
+                        if (!string.IsNullOrEmpty(item.Id) && 
+                            !string.IsNullOrEmpty(item.ContentDetails?.RelatedPlaylists?.Uploads))
+                        {
+                            results[item.Id] = item.ContentDetails.RelatedPlaylists.Uploads;
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching uploads playlist IDs in batch");
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Gets channel metadata including name and thumbnail.
+    /// </summary>
+    public async Task<ChannelMetadata?> GetChannelMetadataAsync(
+        string channelId,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await _httpClient.GetAsync(
+                $"channels?part=snippet&id={channelId}&key={_apiKey}",
+                cancellationToken);
+
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(cancellationToken);
+            var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
+
+            var item = result?.Items?.FirstOrDefault();
+            if (item?.Snippet != null)
+            {
+                return new ChannelMetadata
+                {
+                    ChannelId = channelId,
+                    Title = item.Snippet.Title,
+                    ThumbnailUrl = item.Snippet.Thumbnails?.Medium?.Url
+                };
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching channel metadata for {ChannelId}", channelId);
+            return null;
+        }
+    }
+
+    public class ChannelMetadata
+    {
+        public string ChannelId { get; set; } = null!;
+        public string? Title { get; set; }
+        public string? ThumbnailUrl { get; set; }
+    }
+
     public async Task<List<PlaylistItem>> GetPlaylistItemsAsync(
         string playlistId,
         DateTimeOffset? publishedAfter = null,
@@ -118,8 +248,23 @@ public class YouTubeApiService
 
     public class ChannelItem
     {
+        [JsonPropertyName("id")]
+        public string? Id { get; set; }
+
         [JsonPropertyName("contentDetails")]
         public ContentDetails? ContentDetails { get; set; }
+
+        [JsonPropertyName("snippet")]
+        public ChannelSnippet? Snippet { get; set; }
+    }
+
+    public class ChannelSnippet
+    {
+        [JsonPropertyName("title")]
+        public string? Title { get; set; }
+
+        [JsonPropertyName("thumbnails")]
+        public Thumbnails? Thumbnails { get; set; }
     }
 
     public class ContentDetails
