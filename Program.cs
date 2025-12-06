@@ -110,6 +110,14 @@ builder.Services.AddHealthChecks()
     .AddDbContextCheck<MeTubeDbContext>("database")
     .AddCheck<BackgroundJobHealthCheck>("background_jobs");
 
+// Add output caching (#34)
+builder.Services.AddOutputCache(options =>
+{
+    options.AddBasePolicy(builder => builder
+        .Expire(TimeSpan.FromMinutes(5))
+        .Tag("feed"));
+});
+
 // Add OpenAPI/Swagger
 builder.Services.AddOpenApi();
 
@@ -165,6 +173,9 @@ using (var scope = app.Services.CreateScope())
 
 // Use rate limiting middleware
 app.UseRateLimiter();
+
+// Use output caching (#34)
+app.UseOutputCache();
 
 // Configure the HTTP request pipeline
 if (app.Environment.IsDevelopment())
@@ -530,9 +541,8 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     if (effectiveLimit > hubOptions.MaxFeedLimit)
         effectiveLimit = hubOptions.MaxFeedLimit;
 
-    var user = await db.Users
-        .Include(u => u.UserChannels)
-        .FirstOrDefaultAsync(u => u.AppUserId == appUserId);
+    // Use compiled query for better performance (#35)
+    var user = await MeTubeDbContext.GetUserByAppUserIdAsync(db, appUserId);
 
     if (user == null)
     {
@@ -543,7 +553,7 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     
     if (channelIds.Count == 0)
     {
-        return Results.Ok(new FeedResponse { Videos = new List<VideoDto>(), NextCursor = null });
+        return Results.Ok(new FeedResponse { Videos = Array.Empty<VideoDto>(), NextCursor = null });
     }
 
     DateTimeOffset? sinceDate = null;
@@ -596,6 +606,11 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     return Results.Ok(response);
 })
 .WithName("GetUserFeed")
-.RequireRateLimiting("fixed");
+.RequireRateLimiting("fixed")
+.CacheOutput(policy => policy
+    .Expire(TimeSpan.FromMinutes(2))
+    .SetVaryByRouteValue("appUserId")
+    .SetVaryByQuery("since", "limit")
+    .Tag("feed"));
 
 app.Run();
