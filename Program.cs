@@ -68,6 +68,7 @@ builder.Services.AddHttpClient<WebSubService>()
 builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
 builder.Services.AddSingleton<YouTubeQuotaTracker>();
+builder.Services.AddSingleton<BackgroundJobHealthCheck>();
 builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<HubOptions>>().Value;
@@ -103,6 +104,11 @@ builder.Services.AddRateLimiter(options =>
         limiterOptions.QueueLimit = 5;
     });
 });
+
+// Add health checks (#21)
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<MeTubeDbContext>("database")
+    .AddCheck<BackgroundJobHealthCheck>("background_jobs");
 
 // Add OpenAPI/Swagger
 builder.Services.AddOpenApi();
@@ -166,8 +172,11 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-// Health check endpoint
-app.MapGet("/health", async (MeTubeDbContext db) =>
+// Health check endpoints (#21)
+app.MapHealthChecks("/health");
+
+// Detailed health check with stats
+app.MapGet("/health/details", async (MeTubeDbContext db) =>
 {
     try
     {
@@ -200,7 +209,7 @@ app.MapGet("/health", async (MeTubeDbContext db) =>
         return Results.Json(new { status = "unhealthy", message = ex.Message }, statusCode: 503);
     }
 })
-.WithName("HealthCheck");
+.WithName("HealthCheckDetails");
 
 // WebSub Endpoints
 app.MapGet("/websub/youtube", async (HttpContext context, MeTubeDbContext db, ILogger<Program> logger) =>

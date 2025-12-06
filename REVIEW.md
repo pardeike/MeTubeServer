@@ -369,7 +369,7 @@ options.UseSqlite(connectionString, sqliteOptions =>
 var uniqueChannelIds = request.ChannelIds.Distinct().ToList();
 ```
 
-### 21. No Health Check for Background Jobs
+### ✅ 21. No Health Check for Background Jobs
 
 **Issue**: Health endpoint only checks database. Background jobs could be crashed or stuck.
 
