@@ -383,7 +383,7 @@ builder.Services.AddHealthChecks()
     .AddCheck<ReconciliationJobHealthCheck>();
 ```
 
-### 22. YouTube API Quota Not Tracked
+### ✅ 22. YouTube API Quota Not Tracked
 
 **Issue**: No visibility into quota usage. Could hit quota limit unexpectedly.
 

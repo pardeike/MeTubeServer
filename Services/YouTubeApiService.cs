@@ -10,12 +10,18 @@ public class YouTubeApiService
     private readonly HttpClient _httpClient;
     private readonly ILogger<YouTubeApiService> _logger;
     private readonly string _apiKey;
+    private readonly YouTubeQuotaTracker _quotaTracker;
 
-    public YouTubeApiService(HttpClient httpClient, IOptions<YouTubeOptions> options, ILogger<YouTubeApiService> logger)
+    public YouTubeApiService(
+        HttpClient httpClient, 
+        IOptions<YouTubeOptions> options, 
+        ILogger<YouTubeApiService> logger,
+        YouTubeQuotaTracker quotaTracker)
     {
         _httpClient = httpClient;
         _logger = logger;
         _apiKey = options.Value.ApiKey;
+        _quotaTracker = quotaTracker;
         _httpClient.BaseAddress = new Uri("https://www.googleapis.com/youtube/v3/");
     }
 
@@ -28,6 +34,8 @@ public class YouTubeApiService
                 cancellationToken);
 
             response.EnsureSuccessStatusCode();
+            _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list with contentDetails = 1 unit
+            
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
 
@@ -56,6 +64,7 @@ public class YouTubeApiService
 
             if (response.IsSuccessStatusCode)
             {
+                _quotaTracker.RecordQuotaUsage("search.list", 100); // search.list = 100 units
                 _logger.LogInformation("YouTube API key validated successfully");
                 return true;
             }
@@ -102,6 +111,8 @@ public class YouTubeApiService
                     cancellationToken);
 
                 response.EnsureSuccessStatusCode();
+                _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list = 1 unit
+                
                 var json = await response.Content.ReadAsStringAsync(cancellationToken);
                 var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
 
@@ -140,6 +151,8 @@ public class YouTubeApiService
                 cancellationToken);
 
             response.EnsureSuccessStatusCode();
+            _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list = 1 unit
+            
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
 
@@ -182,6 +195,7 @@ public class YouTubeApiService
             
             var response = await _httpClient.GetAsync(url, cancellationToken);
             response.EnsureSuccessStatusCode();
+            _quotaTracker.RecordQuotaUsage("playlistItems.list", 1); // playlistItems.list = 1 unit
             
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<PlaylistItemsResponse>(json);
@@ -222,6 +236,7 @@ public class YouTubeApiService
                 
                 var response = await _httpClient.GetAsync(url, cancellationToken);
                 response.EnsureSuccessStatusCode();
+                _quotaTracker.RecordQuotaUsage("videos.list", 1); // videos.list = 1 unit
                 
                 var json = await response.Content.ReadAsStringAsync(cancellationToken);
                 var result = JsonSerializer.Deserialize<VideosResponse>(json);
