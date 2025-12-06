@@ -69,6 +69,7 @@ builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
 builder.Services.AddSingleton<YouTubeQuotaTracker>();
 builder.Services.AddSingleton<BackgroundJobHealthCheck>();
+builder.Services.AddSingleton<MetricsService>();
 builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 {
     var options = sp.GetRequiredService<IOptions<HubOptions>>().Value;
@@ -117,6 +118,23 @@ builder.Services.AddOutputCache(options =>
         .Expire(TimeSpan.FromMinutes(5))
         .Tag("feed"));
 });
+
+// Add CORS if configured (#32)
+var corsOrigins = builder.Configuration.GetSection("Hub").Get<HubOptions>()?.CorsAllowedOrigins ?? string.Empty;
+if (!string.IsNullOrWhiteSpace(corsOrigins))
+{
+    var origins = corsOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    builder.Services.AddCors(options =>
+    {
+        options.AddDefaultPolicy(policy =>
+        {
+            policy.WithOrigins(origins)
+                  .AllowAnyMethod()
+                  .AllowAnyHeader()
+                  .AllowCredentials();
+        });
+    });
+}
 
 // Add OpenAPI/Swagger
 builder.Services.AddOpenApi();
@@ -173,6 +191,12 @@ using (var scope = app.Services.CreateScope())
 
 // Use rate limiting middleware
 app.UseRateLimiter();
+
+// Use CORS if configured (#32)
+if (!string.IsNullOrWhiteSpace(corsOrigins))
+{
+    app.UseCors();
+}
 
 // Use output caching (#34)
 app.UseOutputCache();
@@ -267,6 +291,7 @@ app.MapPost("/websub/youtube", async (
     AtomFeedParser atomParser,
     WebSubService webSubService,
     IBackgroundTaskQueue taskQueue,
+    MetricsService metrics,
     ILogger<Program> logger) =>
 {
     using var reader = new StreamReader(context.Request.Body);
@@ -297,6 +322,9 @@ app.MapPost("/websub/youtube", async (
         // Get the channel from the first entry
         var channelIdFromFeed = atomEntries[0].ChannelId;
         var channel = await db.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelIdFromFeed);
+        
+        // Record metric (#18)
+        metrics.RecordWebSubNotification(channelIdFromFeed);
 
         if (channel != null && !string.IsNullOrEmpty(channel.HubSecret))
         {
@@ -356,6 +384,9 @@ app.MapPost("/websub/youtube", async (
 
         logger.LogInformation("Added new video {VideoId} for channel {ChannelId}", entry.VideoId, entry.ChannelId);
         
+        // Record metric (#18)
+        metrics.RecordVideoAdded(entry.ChannelId, entry.VideoId);
+        
         // Queue video enrichment (#6)
         var videoId = entry.VideoId;
         await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
@@ -381,6 +412,7 @@ app.MapPost("/api/users/{appUserId}/channels", async (
     WebSubService webSubService,
     YouTubeApiService youtubeApi,
     IBackgroundTaskQueue taskQueue,
+    MetricsService metrics,
     ILogger<Program> logger) =>
 {
     // Deduplicate channel IDs (#20)
@@ -514,6 +546,9 @@ app.MapPost("/api/users/{appUserId}/channels", async (
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
 
+        // Record metric (#18)
+        metrics.RecordChannelsRegistered(uniqueChannelIds.Count, appUserId);
+        
         logger.LogInformation("Successfully registered channels for user {UserId}", appUserId);
         return Results.Ok(new { message = "Channels registered successfully" });
     }
@@ -531,9 +566,11 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     string appUserId,
     MeTubeDbContext db,
     IOptions<HubOptions> options,
+    MetricsService metrics,
     string? since = null,
     int? limit = null) =>
 {
+    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
     var hubOptions = options.Value;
     
     // Apply default and max limits (#24)
@@ -603,6 +640,11 @@ app.MapGet("/api/users/{appUserId}/feed", async (
         NextCursor = nextCursor
     };
 
+    // Record metrics (#18)
+    stopwatch.Stop();
+    metrics.RecordFeedRequest(appUserId);
+    metrics.RecordFeedRequestDuration(stopwatch.Elapsed.TotalMilliseconds, appUserId);
+    
     return Results.Ok(response);
 })
 .WithName("GetUserFeed")

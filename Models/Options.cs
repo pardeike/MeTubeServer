@@ -65,4 +65,10 @@ public class HubOptions
     /// Background task queue capacity.
     /// </summary>
     public int BackgroundTaskQueueCapacity { get; set; } = 100;
+    
+    /// <summary>
+    /// Comma-separated list of allowed CORS origins. Leave empty to disable CORS.
+    /// Example: "https://example.com,https://app.example.com"
+    /// </summary>
+    public string CorsAllowedOrigins { get; set; } = string.Empty;
 }
