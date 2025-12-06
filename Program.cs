@@ -49,6 +49,7 @@ builder.Services.AddHttpClient<WebSubService>()
 
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
+builder.Services.AddScoped<VideoEnrichmentService>();
 builder.Services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
 
 // Add background jobs
@@ -222,6 +223,7 @@ app.MapPost("/websub/youtube", async (
     MeTubeDbContext db,
     AtomFeedParser atomParser,
     WebSubService webSubService,
+    IBackgroundTaskQueue taskQueue,
     ILogger<Program> logger) =>
 {
     using var reader = new StreamReader(context.Request.Body);
@@ -310,6 +312,15 @@ app.MapPost("/websub/youtube", async (
         }
 
         logger.LogInformation("Added new video {VideoId} for channel {ChannelId}", entry.VideoId, entry.ChannelId);
+        
+        // Queue video enrichment (#6)
+        var videoId = entry.VideoId;
+        await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+        {
+            var enrichmentService = sp.GetRequiredService<VideoEnrichmentService>();
+            var dbContext = sp.GetRequiredService<MeTubeDbContext>();
+            await enrichmentService.EnrichVideoAsync(videoId, dbContext, ct);
+        });
     }
 
     await db.SaveChangesAsync();
