@@ -120,10 +120,12 @@ builder.Services.AddOutputCache(options =>
 });
 
 // Add CORS if configured (#32)
-var corsOrigins = builder.Configuration.GetSection("Hub").Get<HubOptions>()?.CorsAllowedOrigins ?? string.Empty;
-if (!string.IsNullOrWhiteSpace(corsOrigins))
+var hubOptionsForCors = builder.Configuration.GetSection("Hub").Get<HubOptions>();
+var hasCorsOrigins = !string.IsNullOrWhiteSpace(hubOptionsForCors?.CorsAllowedOrigins);
+if (hasCorsOrigins && hubOptionsForCors != null)
 {
-    var origins = corsOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var origins = hubOptionsForCors.CorsAllowedOrigins
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     builder.Services.AddCors(options =>
     {
         options.AddDefaultPolicy(policy =>
@@ -193,7 +195,7 @@ using (var scope = app.Services.CreateScope())
 app.UseRateLimiter();
 
 // Use CORS if configured (#32)
-if (!string.IsNullOrWhiteSpace(corsOrigins))
+if (hasCorsOrigins)
 {
     app.UseCors();
 }
