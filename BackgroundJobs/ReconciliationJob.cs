@@ -57,6 +57,7 @@ public class ReconciliationJob : BackgroundService
         using var scope = _serviceProvider.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<MeTubeDbContext>();
         var youtubeApi = scope.ServiceProvider.GetRequiredService<YouTubeApiService>();
+        var taskQueue = scope.ServiceProvider.GetRequiredService<IBackgroundTaskQueue>();
 
         var channels = await dbContext.Channels
             .Where(c => c.UploadsPlaylistId != null)
@@ -71,7 +72,7 @@ public class ReconciliationJob : BackgroundService
             
             try
             {
-                await ReconcileChannelAsync(channel, dbContext, youtubeApi, cancellationToken);
+                await ReconcileChannelAsync(channel, dbContext, youtubeApi, taskQueue, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -84,6 +85,7 @@ public class ReconciliationJob : BackgroundService
         Channel channel,
         MeTubeDbContext dbContext,
         YouTubeApiService youtubeApi,
+        IBackgroundTaskQueue taskQueue,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(channel.UploadsPlaylistId))
@@ -140,6 +142,15 @@ public class ReconciliationJob : BackgroundService
                 }
 
                 _logger.LogInformation("Added video {VideoId} for channel {ChannelId}", videoId, channel.ChannelId);
+                
+                // Queue video enrichment to fetch duration and other metadata
+                var videoIdForEnrichment = videoId;
+                await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                {
+                    var enrichmentService = sp.GetRequiredService<VideoEnrichmentService>();
+                    var dbContextForEnrichment = sp.GetRequiredService<MeTubeDbContext>();
+                    await enrichmentService.EnrichVideoAsync(videoIdForEnrichment, dbContextForEnrichment, ct);
+                });
             }
         }
 
