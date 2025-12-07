@@ -644,11 +644,9 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     var allResults = await query.ToListAsync();
     
     // Apply date filter client-side if provided
-    IEnumerable<dynamic> filteredResults = allResults;
-    if (sinceDate.HasValue)
-    {
-        filteredResults = allResults.Where(x => x.Video.PublishedAt > sinceDate.Value);
-    }
+    var filteredResults = sinceDate.HasValue
+        ? allResults.Where(x => x.Video.PublishedAt > sinceDate.Value)
+        : allResults;
     
     var results = filteredResults
         .OrderByDescending(x => x.Video.PublishedAt)

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MeTubeServer.Data;
+using MeTubeServer.Models;
 using MeTubeServer.Services;
 
 namespace MeTubeServer.BackgroundJobs;
@@ -67,7 +68,10 @@ public class SubscriptionMaintenanceJob : BackgroundService
             .Where(c => c.LeaseExpiresAt != null && c.LeaseExpiresAt < expiryThreshold)
             .ToListAsync(cancellationToken);
 
-        var channelsToRenew = channelsWithoutLease.Concat(channelsWithExpiringLease).ToList();
+        // Combine results efficiently
+        var channelsToRenew = new List<Channel>(channelsWithoutLease.Count + channelsWithExpiringLease.Count);
+        channelsToRenew.AddRange(channelsWithoutLease);
+        channelsToRenew.AddRange(channelsWithExpiringLease);
 
         _logger.LogInformation("Found {Count} channels to renew subscriptions", channelsToRenew.Count);
 
