@@ -33,6 +33,13 @@ public class YouTubeApiService
                 $"channels?part=contentDetails&id={channelId}&key={_apiKey}",
                 cancellationToken);
 
+            // Handle 404 gracefully - channel may be deleted or terminated
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogWarning("Channel {ChannelId} not found (404) - may be deleted or terminated", channelId);
+                return null;
+            }
+
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list with contentDetails = 1 unit
             
@@ -150,6 +157,13 @@ public class YouTubeApiService
                 $"channels?part=snippet&id={channelId}&key={_apiKey}",
                 cancellationToken);
 
+            // Handle 404 gracefully - channel may be deleted or terminated
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogWarning("Channel {ChannelId} not found (404) - may be deleted or terminated", channelId);
+                return null;
+            }
+
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list = 1 unit
             
@@ -194,6 +208,14 @@ public class YouTubeApiService
             var url = $"playlistItems?part=snippet,contentDetails&playlistId={playlistId}&maxResults={maxResults}&key={_apiKey}";
             
             var response = await _httpClient.GetAsync(url, cancellationToken);
+            
+            // Handle 404 gracefully - playlist may be deleted or private
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                _logger.LogWarning("Playlist {PlaylistId} not found (404) - may be deleted or private", playlistId);
+                return new List<PlaylistItem>();
+            }
+            
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("playlistItems.list", 1); // playlistItems.list = 1 unit
             
