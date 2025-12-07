@@ -615,7 +615,9 @@ app.MapGet("/api/users/{appUserId}/feed", async (
         query = query.Where(x => x.Video.PublishedAt > sinceDate.Value);
     }
 
-    var results = await query
+    // SQLite doesn't support DateTimeOffset in ORDER BY, so fetch and order client-side
+    var allResults = await query.ToListAsync();
+    var results = allResults
         .OrderByDescending(x => x.Video.PublishedAt)
         .Take(effectiveLimit + 1) // Fetch one extra to determine if there are more results
         .Select(x => new VideoDto
@@ -628,7 +630,7 @@ app.MapGet("/api/users/{appUserId}/feed", async (
             ThumbnailUrl = x.Video.ThumbnailUrl,
             Duration = x.Video.Duration
         })
-        .ToListAsync();
+        .ToList();
 
     // Implement pagination (#13)
     string? nextCursor = null;
