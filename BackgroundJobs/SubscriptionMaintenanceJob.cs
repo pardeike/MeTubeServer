@@ -57,9 +57,17 @@ public class SubscriptionMaintenanceJob : BackgroundService
 
         var expiryThreshold = DateTimeOffset.UtcNow + _safetyMargin;
 
-        var channelsToRenew = await dbContext.Channels
-            .Where(c => c.LeaseExpiresAt == null || c.LeaseExpiresAt < expiryThreshold)
+        // Fetch channels that need renewal: those without a lease or with an expiring lease
+        // Split into two queries to work around EF Core SQLite translation limitations
+        var channelsWithoutLease = await dbContext.Channels
+            .Where(c => c.LeaseExpiresAt == null)
             .ToListAsync(cancellationToken);
+
+        var channelsWithExpiringLease = await dbContext.Channels
+            .Where(c => c.LeaseExpiresAt != null && c.LeaseExpiresAt < expiryThreshold)
+            .ToListAsync(cancellationToken);
+
+        var channelsToRenew = channelsWithoutLease.Concat(channelsWithExpiringLease).ToList();
 
         _logger.LogInformation("Found {Count} channels to renew subscriptions", channelsToRenew.Count);
 
