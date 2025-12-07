@@ -615,7 +615,9 @@ app.MapGet("/api/users/{appUserId}/feed", async (
         query = query.Where(x => x.Video.PublishedAt > sinceDate.Value);
     }
 
-    // SQLite doesn't support DateTimeOffset in ORDER BY, so fetch and order client-side
+    // SQLite doesn't support DateTimeOffset in ORDER BY clauses, so we fetch and order client-side.
+    // This is acceptable because the query is pre-filtered by user's channel subscriptions and
+    // optional date filter, typically resulting in a manageable dataset for most users.
     var allResults = await query.ToListAsync();
     var results = allResults
         .OrderByDescending(x => x.Video.PublishedAt)
