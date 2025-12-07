@@ -638,16 +638,19 @@ app.MapGet("/api/users/{appUserId}/feed", async (
                 where channelIds.Contains(v.ChannelId)
                 select new { Video = v, Channel = c };
 
+    // SQLite has limitations with DateTimeOffset comparisons in WHERE clauses when combined with joins,
+    // so we fetch and filter client-side. This is acceptable because the query is pre-filtered by 
+    // user's channel subscriptions, typically resulting in a manageable dataset for most users.
+    var allResults = await query.ToListAsync();
+    
+    // Apply date filter client-side if provided
+    IEnumerable<dynamic> filteredResults = allResults;
     if (sinceDate.HasValue)
     {
-        query = query.Where(x => x.Video.PublishedAt > sinceDate.Value);
+        filteredResults = allResults.Where(x => x.Video.PublishedAt > sinceDate.Value);
     }
-
-    // SQLite doesn't support DateTimeOffset in ORDER BY clauses, so we fetch and order client-side.
-    // This is acceptable because the query is pre-filtered by user's channel subscriptions and
-    // optional date filter, typically resulting in a manageable dataset for most users.
-    var allResults = await query.ToListAsync();
-    var results = allResults
+    
+    var results = filteredResults
         .OrderByDescending(x => x.Video.PublishedAt)
         .Take(effectiveLimit + 1) // Fetch one extra to determine if there are more results
         .Select(x => new VideoDto
