@@ -616,7 +616,7 @@ app.MapGet("/api/users/{appUserId}/feed", async (
     }
 
     var results = await query
-        .OrderByDescending(x => x.Video.PublishedAt)
+        .OrderByDescending(x => x.Video.PublishedAt.ToUnixTimeSeconds())
         .Take(effectiveLimit + 1) // Fetch one extra to determine if there are more results
         .Select(x => new VideoDto
         {
