@@ -538,57 +538,63 @@ app.MapPost("/api/users/{appUserId}/channels", async (
         // happens in the background after the client has received the response
         if (newChannelInfo != null && newChannelInfo.Count > 0)
         {
-            var channelInfoCopy = newChannelInfo.ToList();
             _ = Task.Run(async () =>
             {
-                foreach (var (channelId, topicUrl, hubSecret) in channelInfoCopy)
+                try
                 {
-                    // Queue WebSub subscription
-                    await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                    foreach (var (channelId, topicUrl, hubSecret) in newChannelInfo)
                     {
-                        var webSub = sp.GetRequiredService<WebSubService>();
-                        var log = sp.GetRequiredService<ILogger<Program>>();
-                        try
+                        // Queue WebSub subscription
+                        await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
                         {
-                            await webSub.SubscribeAsync(topicUrl, hubSecret, ct);
-                            log.LogInformation("Subscribed to WebSub for channel {ChannelId}", channelId);
-                        }
-                        catch (Exception ex)
-                        {
-                            log.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
-                        }
-                    });
-                    
-                    // Queue uploads playlist and metadata fetch
-                    await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
-                    {
-                        var ytApi = sp.GetRequiredService<YouTubeApiService>();
-                        var dbContext = sp.GetRequiredService<MeTubeDbContext>();
-                        var log = sp.GetRequiredService<ILogger<Program>>();
-                        try
-                        {
-                            var uploadsPlaylistId = await ytApi.GetUploadsPlaylistIdAsync(channelId, ct);
-                            var metadata = await ytApi.GetChannelMetadataAsync(channelId, ct);
-                            
-                            var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId, ct);
-                            if (ch != null)
+                            var webSub = sp.GetRequiredService<WebSubService>();
+                            var log = sp.GetRequiredService<ILogger<Program>>();
+                            try
                             {
-                                ch.UploadsPlaylistId = uploadsPlaylistId;
-                                if (metadata != null)
-                                {
-                                    ch.ChannelName = metadata.Title;
-                                    ch.ChannelThumbnailUrl = metadata.ThumbnailUrl;
-                                    ch.MetadataLastUpdated = DateTimeOffset.UtcNow;
-                                }
-                                await dbContext.SaveChangesAsync(ct);
-                                log.LogInformation("Updated metadata for channel {ChannelId}", channelId);
+                                await webSub.SubscribeAsync(topicUrl, hubSecret, ct);
+                                log.LogInformation("Subscribed to WebSub for channel {ChannelId}", channelId);
                             }
-                        }
-                        catch (Exception ex)
+                            catch (Exception ex)
+                            {
+                                log.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
+                            }
+                        });
+                        
+                        // Queue uploads playlist and metadata fetch
+                        await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
                         {
-                            log.LogError(ex, "Error fetching metadata for channel {ChannelId}", channelId);
-                        }
-                    });
+                            var ytApi = sp.GetRequiredService<YouTubeApiService>();
+                            var dbContext = sp.GetRequiredService<MeTubeDbContext>();
+                            var log = sp.GetRequiredService<ILogger<Program>>();
+                            try
+                            {
+                                var uploadsPlaylistId = await ytApi.GetUploadsPlaylistIdAsync(channelId, ct);
+                                var metadata = await ytApi.GetChannelMetadataAsync(channelId, ct);
+                                
+                                var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId, ct);
+                                if (ch != null)
+                                {
+                                    ch.UploadsPlaylistId = uploadsPlaylistId;
+                                    if (metadata != null)
+                                    {
+                                        ch.ChannelName = metadata.Title;
+                                        ch.ChannelThumbnailUrl = metadata.ThumbnailUrl;
+                                        ch.MetadataLastUpdated = DateTimeOffset.UtcNow;
+                                    }
+                                    await dbContext.SaveChangesAsync(ct);
+                                    log.LogInformation("Updated metadata for channel {ChannelId}", channelId);
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                log.LogError(ex, "Error fetching metadata for channel {ChannelId}", channelId);
+                            }
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Error queuing background tasks for user {UserId}", appUserId);
                 }
             });
         }
