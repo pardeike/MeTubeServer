@@ -442,13 +442,17 @@ app.MapPost("/api/users/{appUserId}/channels", async (
     YouTubeApiService youtubeApi,
     IBackgroundTaskQueue taskQueue,
     MetricsService metrics,
-    ILogger<Program> logger) =>
+    ILogger<Program> logger,
+    IServiceProvider serviceProvider) =>
 {
     // Deduplicate channel IDs (#20)
     var uniqueChannelIds = request.ChannelIds.Distinct().ToList();
     
     logger.LogInformation("Registering {Count} unique channels for user {UserId}",
         uniqueChannelIds.Count, appUserId);
+
+    // Capture channel info for background processing
+    List<(string ChannelId, string TopicUrl, string HubSecret)>? newChannelInfo = null;
 
     // Use transaction for data consistency (#5)
     using var transaction = await db.Database.BeginTransactionAsync();
@@ -476,7 +480,7 @@ app.MapPost("/api/users/{appUserId}/channels", async (
             logger.LogInformation("Creating {Count} new channels", newChannelIds.Count);
             
             // Create new channels first
-            var newChannels = new List<Channel>();
+            newChannelInfo = new List<(string, string, string)>();
             foreach (var channelId in newChannelIds)
             {
                 var topicUrl = $"https://www.youtube.com/feeds/videos.xml?channel_id={channelId}";
@@ -490,65 +494,10 @@ app.MapPost("/api/users/{appUserId}/channels", async (
                 };
 
                 db.Channels.Add(channel);
-                newChannels.Add(channel);
+                newChannelInfo.Add((channelId, topicUrl, hubSecret));
             }
             
             await db.SaveChangesAsync();
-            
-            // Queue background tasks for WebSub and metadata (#1)
-            foreach (var channel in newChannels)
-            {
-                var channelId = channel.ChannelId;
-                var topicUrl = channel.TopicUrl;
-                var hubSecret = channel.HubSecret ?? string.Empty;
-                
-                // Queue WebSub subscription
-                await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
-                {
-                    var webSub = sp.GetRequiredService<WebSubService>();
-                    var log = sp.GetRequiredService<ILogger<Program>>();
-                    try
-                    {
-                        await webSub.SubscribeAsync(topicUrl, hubSecret, ct);
-                        log.LogInformation("Subscribed to WebSub for channel {ChannelId}", channelId);
-                    }
-                    catch (Exception ex)
-                    {
-                        log.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
-                    }
-                });
-                
-                // Queue uploads playlist and metadata fetch
-                await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
-                {
-                    var ytApi = sp.GetRequiredService<YouTubeApiService>();
-                    var dbContext = sp.GetRequiredService<MeTubeDbContext>();
-                    var log = sp.GetRequiredService<ILogger<Program>>();
-                    try
-                    {
-                        var uploadsPlaylistId = await ytApi.GetUploadsPlaylistIdAsync(channelId, ct);
-                        var metadata = await ytApi.GetChannelMetadataAsync(channelId, ct);
-                        
-                        var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId, ct);
-                        if (ch != null)
-                        {
-                            ch.UploadsPlaylistId = uploadsPlaylistId;
-                            if (metadata != null)
-                            {
-                                ch.ChannelName = metadata.Title;
-                                ch.ChannelThumbnailUrl = metadata.ThumbnailUrl;
-                                ch.MetadataLastUpdated = DateTimeOffset.UtcNow;
-                            }
-                            await dbContext.SaveChangesAsync(ct);
-                            log.LogInformation("Updated metadata for channel {ChannelId}", channelId);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        log.LogError(ex, "Error fetching metadata for channel {ChannelId}", channelId);
-                    }
-                });
-            }
         }
 
         // Link user to all channels
@@ -583,6 +532,66 @@ app.MapPost("/api/users/{appUserId}/channels", async (
         metrics.RecordChannelsRegistered(uniqueChannelIds.Count, appUserId);
         
         logger.LogInformation("Successfully registered channels for user {UserId}", appUserId);
+        
+        // Queue background tasks asynchronously after response is returned
+        // This prevents blocking when the queue is full (#43)
+        if (newChannelInfo != null && newChannelInfo.Count > 0)
+        {
+            var channelInfoCopy = newChannelInfo.ToList();
+            _ = Task.Run(async () =>
+            {
+                foreach (var (channelId, topicUrl, hubSecret) in channelInfoCopy)
+                {
+                    // Queue WebSub subscription
+                    await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                    {
+                        var webSub = sp.GetRequiredService<WebSubService>();
+                        var log = sp.GetRequiredService<ILogger<Program>>();
+                        try
+                        {
+                            await webSub.SubscribeAsync(topicUrl, hubSecret, ct);
+                            log.LogInformation("Subscribed to WebSub for channel {ChannelId}", channelId);
+                        }
+                        catch (Exception ex)
+                        {
+                            log.LogError(ex, "Error subscribing to WebSub for channel {ChannelId}", channelId);
+                        }
+                    });
+                    
+                    // Queue uploads playlist and metadata fetch
+                    await taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
+                    {
+                        var ytApi = sp.GetRequiredService<YouTubeApiService>();
+                        var dbContext = sp.GetRequiredService<MeTubeDbContext>();
+                        var log = sp.GetRequiredService<ILogger<Program>>();
+                        try
+                        {
+                            var uploadsPlaylistId = await ytApi.GetUploadsPlaylistIdAsync(channelId, ct);
+                            var metadata = await ytApi.GetChannelMetadataAsync(channelId, ct);
+                            
+                            var ch = await dbContext.Channels.FirstOrDefaultAsync(c => c.ChannelId == channelId, ct);
+                            if (ch != null)
+                            {
+                                ch.UploadsPlaylistId = uploadsPlaylistId;
+                                if (metadata != null)
+                                {
+                                    ch.ChannelName = metadata.Title;
+                                    ch.ChannelThumbnailUrl = metadata.ThumbnailUrl;
+                                    ch.MetadataLastUpdated = DateTimeOffset.UtcNow;
+                                }
+                                await dbContext.SaveChangesAsync(ct);
+                                log.LogInformation("Updated metadata for channel {ChannelId}", channelId);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            log.LogError(ex, "Error fetching metadata for channel {ChannelId}", channelId);
+                        }
+                    });
+                }
+            });
+        }
+        
         return Results.Ok(new { message = "Channels registered successfully" });
     }
     catch (Exception ex)
