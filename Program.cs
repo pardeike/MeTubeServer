@@ -442,8 +442,7 @@ app.MapPost("/api/users/{appUserId}/channels", async (
     YouTubeApiService youtubeApi,
     IBackgroundTaskQueue taskQueue,
     MetricsService metrics,
-    ILogger<Program> logger,
-    IServiceProvider serviceProvider) =>
+    ILogger<Program> logger) =>
 {
     // Deduplicate channel IDs (#20)
     var uniqueChannelIds = request.ChannelIds.Distinct().ToList();
@@ -534,7 +533,9 @@ app.MapPost("/api/users/{appUserId}/channels", async (
         logger.LogInformation("Successfully registered channels for user {UserId}", appUserId);
         
         // Queue background tasks asynchronously after response is returned
-        // This prevents blocking when the queue is full (#43)
+        // This prevents blocking the HTTP response when the queue is full
+        // Note: The Task.Run may still block if the queue fills up again, but this
+        // happens in the background after the client has received the response
         if (newChannelInfo != null && newChannelInfo.Count > 0)
         {
             var channelInfoCopy = newChannelInfo.ToList();
