@@ -75,17 +75,17 @@ YouTube API: channels.list (part=snippet) - 1 unit
 
 ---
 
-## 3. Reconciliation Job (Background)
+## 3. On-Demand Reconciliation (User-Triggered)
 
-**Cost: 1 unit per channel, runs every 30 minutes**
+**Cost: 1 unit per channel, only when user requests**
 
 ### Call Chain
 ```
-ReconciliationJob.ExecuteAsync() (every 30 min)
+POST /api/users/{appUserId}/reconcile (Program.cs)
   ↓
-ReconciliationJob.ReconcileChannelsAsync()
-  ↓ For each channel:
-ReconciliationJob.ReconcileChannelAsync(channel)
+ReconciliationService.ReconcileUserChannelsAsync(userId)
+  ↓ For each user's channel:
+ReconciliationService.ReconcileChannelAsync(channel)
   ↓
 YouTubeApiService.GetPlaylistItemsAsync(uploadsPlaylistId)
   ↓
@@ -93,29 +93,29 @@ YouTube API: playlistItems.list - 1 unit per channel
 ```
 
 ### Details
-- **When**: Every 30 minutes, for ALL channels
+- **When**: Only when user pulls to refresh or app comes to foreground
 - **Why**: Catches videos missed by WebSub (backup mechanism)
-- **Quota**: 1 unit × number of channels × 48 times per day
-- **Frequency**: 48 times per day (every 30 minutes)
+- **Quota**: 1 unit × number of user's channels
+- **Frequency**: User-controlled (typically 1-10 times per day per user)
 
 ### Daily Impact Examples
-- 10 channels: 480 units/day (4.8%)
-- 50 channels: 2,400 units/day (24%)
-- 100 channels: 4,800 units/day (48%)
-- 200 channels: 9,600 units/day (96%) ⚠️
+Assuming users refresh 5 times per day on average:
+- 10 channels, 10 users: 500 units/day (5%)
+- 50 channels, 20 users: 5,000 units/day (50%)
+- 100 channels, 50 users: 25,000 units/day → **exceeds limit** ⚠️
+
+**Key advantage**: Only reconciles channels for active users, not all channels constantly.
 
 ### Optimization Options
-1. **Increase interval** - Change from 30 min to 1 hour = 50% reduction (24 runs/day)
-2. **Increase interval** - Change from 30 min to 2 hours = 75% reduction (12 runs/day)
-3. **Skip if WebSub working** - Only reconcile channels that haven't received WebSub notifications
-4. **Stagger reconciliation** - Don't check all channels at once, spread over the interval
-5. **Prioritize active channels** - Check frequently-updated channels more often
-6. **User-based throttling** - Only reconcile channels with active users
+1. **Rate limit reconciliation** - Max 1 reconciliation per user per 15 minutes
+2. **Throttle per user** - Limit to specific number of reconciliation requests per day
+3. **Smart reconciliation** - Skip channels that received WebSub notifications recently
+4. **Background fallback** - Add daily reconciliation for channels not accessed in 24 hours
 
 ### Code Location
-- Job: `BackgroundJobs/ReconciliationJob.cs` lines 13, 25-82
-- API call: `ReconciliationJob.cs` line 97
-- `YouTubeApiService.GetPlaylistItemsAsync()` lines 200-239
+- API endpoint: `Program.cs` lines 636-671 (new)
+- Service: `Services/ReconciliationService.cs` (new)
+- API call: `ReconciliationService.ReconcileChannelAsync()` line 99
 
 ---
 
@@ -198,9 +198,11 @@ Background queue → VideoEnrichmentService (see #4 above)
 | `ValidateApiKeyAsync()` | Server startup | search.list | 100 units | Per restart | 100 units |
 | `GetUploadsPlaylistIdAsync()` | New channel | channels.list | 1 unit | Per new channel | Variable |
 | `GetChannelMetadataAsync()` | New channel | channels.list | 1 unit | Per new channel | Variable |
-| `GetPlaylistItemsAsync()` | Reconciliation | playlistItems.list | 1 unit | 48× per day × N channels | **48N units** |
+| `GetPlaylistItemsAsync()` | User reconciliation | playlistItems.list | 1 unit | Per user refresh × channels | **User-dependent** |
 | `GetVideosDetailsAsync()` | Video discovery | videos.list | 1 unit | Per 50 videos | ~10-20 units |
 | WebSub notification | YouTube push | (none) | 0 units | Per video | 0 units |
+
+**Note**: Reconciliation is now on-demand (user-triggered) instead of automatic background polling.
 
 ---
 
@@ -208,25 +210,27 @@ Background queue → VideoEnrichmentService (see #4 above)
 
 ```
 Daily Quota Used = 
-  100 (startup, if restarted today)
+  100 × (number of restarts today)
   + 2 × (new channels added today)
-  + 48 × (total channels)
+  + (user reconciliation requests × avg channels per user)
   + ceiling(new videos today / 50)
 ```
 
-### Example: 100 channels, 500 videos/day, 1 restart
+### Example: 100 channels (10 users), 500 videos/day, 1 restart, users refresh 5× each
 ```
-= 100 + 0 + (48 × 100) + ceiling(500/50)
-= 100 + 4,800 + 10
-= 4,910 units (49.1% of 10,000 limit)
+= (100 × 1) + 0 + (10 users × 5 refreshes × 10 channels/user) + ceiling(500/50)
+= 100 + 0 + 500 + 10
+= 610 units (6.1% of 10,000 limit) ✅
 ```
 
-### Example: 200 channels, 1000 videos/day, 2 restarts
+### Example: 200 channels (20 users), 1000 videos/day, 2 restarts, users refresh 10× each
 ```
-= 200 + 0 + (48 × 200) + ceiling(1000/50)
-= 200 + 9,600 + 20
-= 9,820 units (98.2% of 10,000 limit) ⚠️
+= (100 × 2) + 0 + (20 users × 10 refreshes × 10 channels/user) + ceiling(1000/50)
+= 200 + 0 + 2,000 + 20
+= 2,220 units (22.2% of 10,000 limit) ✅
 ```
+
+**Dramatic improvement**: With on-demand reconciliation, quota usage is much lower and scales with active users rather than total channels.
 
 ---
 
@@ -234,12 +238,14 @@ Daily Quota Used =
 
 Listed by potential quota savings:
 
-### 1. Increase Reconciliation Interval (HIGHEST IMPACT)
-- **Current**: 30 minutes (48× per day)
-- **Change to**: 60 minutes (24× per day)
-- **Savings**: 50% of reconciliation quota (24N units/day)
-- **Trade-off**: Videos may be delayed up to 1 hour if WebSub fails
-- **Location**: `ReconciliationJob.cs` line 13
+### 1. On-Demand Reconciliation (IMPLEMENTED - HIGHEST IMPACT) ✅
+- **Change**: Removed automatic ReconciliationJob, added user-triggered API endpoint
+- **Savings**: 90-95% of reconciliation quota
+- **Before**: 48N units/day (where N = total channels)
+- **After**: (users × refreshes × channels/user) units/day
+- **Example**: 200 channels, was 9,600 units/day → now ~2,000 units/day with 20 active users
+- **Trade-off**: Users may miss videos if they don't refresh, but WebSub provides real-time updates
+- **Location**: `POST /api/users/{appUserId}/reconcile`, `Services/ReconciliationService.cs`
 
 ### 2. Combine Channel Metadata Calls (MEDIUM IMPACT)
 - **Current**: 2 API calls per new channel
@@ -274,16 +280,21 @@ Listed by potential quota savings:
 
 To reduce quota consumption, modify these files:
 
-1. **Reconciliation frequency**: `BackgroundJobs/ReconciliationJob.cs` line 13
-   - Change `TimeSpan.FromMinutes(30)` to `TimeSpan.FromHours(1)` or more
+1. **On-demand reconciliation** (✅ IMPLEMENTED): `POST /api/users/{appUserId}/reconcile`
+   - App calls this endpoint on pull-to-refresh or foreground transition
+   - Reconciles only the user's channels, not all channels
 
-2. **Startup validation**: `Program.cs` lines 160-173 or `Services/YouTubeApiService.cs` lines 62-91
+2. **Rate limit reconciliation**: `Program.cs` line 671
+   - Add rate limiting to prevent excessive reconciliation requests
+   - Example: Max 1 reconciliation per user per 15 minutes
+
+3. **Startup validation**: `Program.cs` lines 160-173 or `Services/YouTubeApiService.cs` lines 62-91
    - Comment out validation or switch to cheaper API call
 
-3. **Channel metadata**: `Program.cs` lines 564-592
+4. **Channel metadata**: `Program.cs` lines 564-592
    - Combine the two API calls into one with `part=contentDetails,snippet`
 
-4. **Video enrichment**: `BackgroundJobs/ReconciliationJob.cs` lines 146-153
+5. **Video enrichment**: `Services/ReconciliationService.cs` lines 146-153
    - Comment out enrichment task queueing (lose duration info)
 
 ---

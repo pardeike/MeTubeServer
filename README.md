@@ -236,6 +236,19 @@ Register channel subscriptions for a user.
 }
 ```
 
+#### `POST /api/users/{appUserId}/reconcile`
+Trigger on-demand reconciliation for a user's channels. Call this when the user pulls to refresh or the app comes to foreground.
+
+**Response:**
+```json
+{
+  "message": "Reconciliation completed",
+  "newVideosCount": 5
+}
+```
+
+**Quota Impact:** 1 unit per channel × number of user's channels. Only reconciles when user actively requests it, dramatically reducing quota usage compared to automatic polling.
+
 #### `GET /api/users/{appUserId}/feed`
 Get the user's aggregated video feed.
 
@@ -338,23 +351,26 @@ Videos
 
 ## Quota Management
 
-The server minimizes YouTube API quota usage through caching and WebSub push notifications:
+The server minimizes YouTube API quota usage through caching, WebSub push notifications, and on-demand reconciliation:
 - **WebSub subscriptions**: No quota cost (push-based, real-time updates)
+- **On-demand reconciliation**: Only when user refreshes (1 unit per channel)
 - **channels.list**: 1 unit per channel (one-time per channel)
-- **playlistItems.list**: 1 unit per call (periodic reconciliation only)
 - **videos.list**: 1 unit per call (batched up to 50 video IDs)
 
 **Daily Usage Examples:**
-- 10 channels, 2 videos/day: ~583 units/day (5.8% of 10,000 limit)
-- 100 channels, 5 videos/day: ~4,920 units/day (49% of limit)
-- 200 channels, 5 videos/day: ~9,740 units/day (97% of limit) ⚠️
+- 10 channels, 10 users, 5 refreshes/user/day: ~610 units/day (6% of 10,000 limit) ✅
+- 100 channels, 50 users, 5 refreshes/user/day: ~2,610 units/day (26% of limit) ✅
+- 200 channels, 20 users, 10 refreshes/user/day: ~2,220 units/day (22% of limit) ✅
+
+**Key Change**: Automatic reconciliation removed. App must call `POST /api/users/{userId}/reconcile` on pull-to-refresh or foreground transition to check for missed videos.
 
 **Monitoring:**
 - Check quota usage via `/health` or `/health/details` endpoints
 - Quota information includes: used, remaining, limit, and percentage
 - Server logs warnings when usage exceeds 80%
+- Quota resets daily at midnight Pacific Time
 
-📖 **For detailed quota information, optimization strategies, and troubleshooting, see [QUOTA.md](QUOTA.md)**
+📖 **For detailed quota information, optimization strategies, and troubleshooting, see [QUOTA.md](QUOTA.md) and [QUOTA_FUNCTIONS.md](QUOTA_FUNCTIONS.md)**
 
 ## Logging
 

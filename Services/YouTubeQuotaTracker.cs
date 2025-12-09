@@ -26,7 +26,11 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // YouTube API quotas reset at midnight Pacific Time
+            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
+            var today = DateOnly.FromDateTime(pacificTime);
+            
             if (today != _quotaDate)
             {
                 // New day, reset quota
@@ -65,7 +69,11 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // YouTube API quotas reset at midnight Pacific Time
+            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
+            var today = DateOnly.FromDateTime(pacificTime);
+            
             if (today != _quotaDate)
             {
                 return 0;
@@ -120,7 +128,11 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            // YouTube API quotas reset at midnight Pacific Time
+            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
+            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
+            var today = DateOnly.FromDateTime(pacificTime);
+            
             var used = (today == _quotaDate) ? _quotaUsedToday : 0;
             var remaining = Math.Max(0, DailyQuotaLimit - used);
             var percentUsed = (used * 100.0) / DailyQuotaLimit;
@@ -140,30 +152,30 @@ public class YouTubeQuotaTracker
 /// <summary>
 /// Represents YouTube API quota statistics.
 /// </summary>
-public class QuotaStats
+public record QuotaStats
 {
     /// <summary>
     /// Number of quota units used today.
     /// </summary>
-    public int Used { get; set; }
+    public required int Used { get; init; }
 
     /// <summary>
     /// Number of quota units remaining today.
     /// </summary>
-    public int Remaining { get; set; }
+    public required int Remaining { get; init; }
 
     /// <summary>
     /// Daily quota limit.
     /// </summary>
-    public int Limit { get; set; }
+    public required int Limit { get; init; }
 
     /// <summary>
     /// Percentage of quota used (0-100).
     /// </summary>
-    public double PercentUsed { get; set; }
+    public required double PercentUsed { get; init; }
 
     /// <summary>
     /// Date for which these statistics apply.
     /// </summary>
-    public DateOnly Date { get; set; }
+    public required DateOnly Date { get; init; }
 }
