@@ -140,12 +140,11 @@ public class ReconciliationService
                 _logger.LogInformation("Added video {VideoId} for channel {ChannelId}", videoId, channel.ChannelId);
                 
                 // Queue video enrichment to fetch duration and other metadata
-                var videoIdForEnrichment = videoId;
                 await _taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
                 {
                     var enrichmentService = sp.GetRequiredService<VideoEnrichmentService>();
                     var dbContextForEnrichment = sp.GetRequiredService<MeTubeDbContext>();
-                    await enrichmentService.EnrichVideoAsync(videoIdForEnrichment, dbContextForEnrichment, ct);
+                    await enrichmentService.EnrichVideoAsync(videoId, dbContextForEnrichment, ct);
                 });
             }
         }
