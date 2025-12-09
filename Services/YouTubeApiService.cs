@@ -11,22 +11,67 @@ public class YouTubeApiService
     private readonly ILogger<YouTubeApiService> _logger;
     private readonly string _apiKey;
     private readonly YouTubeQuotaTracker _quotaTracker;
+    private readonly YouTubeApiStatusService _apiStatus;
 
     public YouTubeApiService(
         HttpClient httpClient, 
         IOptions<YouTubeOptions> options, 
         ILogger<YouTubeApiService> logger,
-        YouTubeQuotaTracker quotaTracker)
+        YouTubeQuotaTracker quotaTracker,
+        YouTubeApiStatusService apiStatus)
     {
         _httpClient = httpClient;
         _logger = logger;
         _apiKey = options.Value.ApiKey;
         _quotaTracker = quotaTracker;
+        _apiStatus = apiStatus;
         _httpClient.BaseAddress = new Uri("https://www.googleapis.com/youtube/v3/");
+    }
+
+    /// <summary>
+    /// Checks if the API response indicates a quota exceeded error.
+    /// </summary>
+    private bool IsQuotaExceededResponse(HttpResponseMessage response, string? body = null)
+    {
+        if (response.StatusCode != System.Net.HttpStatusCode.Forbidden)
+            return false;
+
+        // If we have the body, check for quota-specific error
+        if (!string.IsNullOrEmpty(body))
+        {
+            return body.Contains("quotaExceeded") || body.Contains("youtube.quota");
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Handles a quota exceeded response by recording the status.
+    /// </summary>
+    private void HandleQuotaExceeded()
+    {
+        _apiStatus.RecordQuotaExceeded();
+    }
+
+    /// <summary>
+    /// Checks if the YouTube API is currently available. If not, logs a warning.
+    /// </summary>
+    /// <returns>True if API is available, false if quota is exceeded.</returns>
+    private bool CheckApiAvailability(string operation)
+    {
+        if (!_apiStatus.IsApiAvailable)
+        {
+            _logger.LogDebug("Skipping YouTube API call ({Operation}) - quota exceeded, waiting for reset", operation);
+            return false;
+        }
+        return true;
     }
 
     public async Task<string?> GetUploadsPlaylistIdAsync(string channelId, CancellationToken cancellationToken = default)
     {
+        if (!CheckApiAvailability("GetUploadsPlaylistIdAsync"))
+            return null;
+
         try
         {
             var response = await _httpClient.GetAsync(
@@ -40,8 +85,20 @@ public class YouTubeApiService
                 return null;
             }
 
+            // Handle quota exceeded
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (IsQuotaExceededResponse(response, body))
+                {
+                    HandleQuotaExceeded();
+                    return null;
+                }
+            }
+
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list with contentDetails = 1 unit
+            _apiStatus.RecordApiAvailable(); // API is working
             
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
@@ -58,9 +115,14 @@ public class YouTubeApiService
     /// <summary>
     /// Validates that the YouTube API key is working by making a simple API call.
     /// </summary>
-    /// <returns>True if API key is valid, false otherwise.</returns>
-    public async Task<bool> ValidateApiKeyAsync(CancellationToken cancellationToken = default)
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="skipStatusCheck">If true, skips the API availability check. Used for recovery polling.</param>
+    /// <returns>True if API key is valid and working, false if quota exceeded or invalid key.</returns>
+    public async Task<bool> ValidateApiKeyAsync(CancellationToken cancellationToken = default, bool skipStatusCheck = false)
     {
+        if (!skipStatusCheck && !CheckApiAvailability("ValidateApiKeyAsync"))
+            return false;
+
         try
         {
             // Make a minimal API call to validate the key
@@ -73,11 +135,22 @@ public class YouTubeApiService
             {
                 _quotaTracker.RecordQuotaUsage("search.list", 100); // search.list = 100 units
                 _logger.LogInformation("YouTube API key validated successfully");
+                _apiStatus.RecordApiAvailable(); // API is working
                 return true;
             }
             else
             {
                 var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                
+                // Check for quota exceeded error
+                if (IsQuotaExceededResponse(response, body))
+                {
+                    _logger.LogWarning("YouTube API key validation failed due to quota exceeded. Status: {StatusCode}", 
+                        response.StatusCode);
+                    HandleQuotaExceeded();
+                    return false;
+                }
+                
                 _logger.LogError("YouTube API key validation failed. Status: {StatusCode}, Body: {Body}",
                     response.StatusCode, body);
                 return false;
@@ -105,6 +178,9 @@ public class YouTubeApiService
         if (channelIds == null || channelIds.Count == 0)
             return results;
 
+        if (!CheckApiAvailability("GetUploadsPlaylistIdsBatchAsync"))
+            return results;
+
         try
         {
             // YouTube API allows up to 50 channel IDs per request
@@ -117,8 +193,20 @@ public class YouTubeApiService
                     $"channels?part=contentDetails,snippet&id={ids}&key={_apiKey}",
                     cancellationToken);
 
+                // Handle quota exceeded
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    if (IsQuotaExceededResponse(response, body))
+                    {
+                        HandleQuotaExceeded();
+                        return results; // Return what we have so far
+                    }
+                }
+
                 response.EnsureSuccessStatusCode();
                 _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list = 1 unit
+                _apiStatus.RecordApiAvailable(); // API is working
                 
                 var json = await response.Content.ReadAsStringAsync(cancellationToken);
                 var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
@@ -151,6 +239,9 @@ public class YouTubeApiService
         string channelId,
         CancellationToken cancellationToken = default)
     {
+        if (!CheckApiAvailability("GetChannelMetadataAsync"))
+            return null;
+
         try
         {
             var response = await _httpClient.GetAsync(
@@ -164,8 +255,20 @@ public class YouTubeApiService
                 return null;
             }
 
+            // Handle quota exceeded
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (IsQuotaExceededResponse(response, body))
+                {
+                    HandleQuotaExceeded();
+                    return null;
+                }
+            }
+
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("channels.list", 1); // channels.list = 1 unit
+            _apiStatus.RecordApiAvailable(); // API is working
             
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<ChannelsResponse>(json);
@@ -203,6 +306,9 @@ public class YouTubeApiService
         int maxResults = 20,
         CancellationToken cancellationToken = default)
     {
+        if (!CheckApiAvailability("GetPlaylistItemsAsync"))
+            return new List<PlaylistItem>();
+
         try
         {
             var url = $"playlistItems?part=snippet,contentDetails&playlistId={playlistId}&maxResults={maxResults}&key={_apiKey}";
@@ -216,8 +322,20 @@ public class YouTubeApiService
                 return new List<PlaylistItem>();
             }
             
+            // Handle quota exceeded
+            if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                if (IsQuotaExceededResponse(response, body))
+                {
+                    HandleQuotaExceeded();
+                    return new List<PlaylistItem>();
+                }
+            }
+            
             response.EnsureSuccessStatusCode();
             _quotaTracker.RecordQuotaUsage("playlistItems.list", 1); // playlistItems.list = 1 unit
+            _apiStatus.RecordApiAvailable(); // API is working
             
             var json = await response.Content.ReadAsStringAsync(cancellationToken);
             var result = JsonSerializer.Deserialize<PlaylistItemsResponse>(json);
@@ -245,6 +363,9 @@ public class YouTubeApiService
         if (videoIds == null || videoIds.Count == 0)
             return new List<VideoDetails>();
 
+        if (!CheckApiAvailability("GetVideosDetailsAsync"))
+            return new List<VideoDetails>();
+
         try
         {
             // YouTube API allows up to 50 video IDs per request
@@ -257,8 +378,21 @@ public class YouTubeApiService
                 var url = $"videos?part=snippet,contentDetails&id={ids}&key={_apiKey}";
                 
                 var response = await _httpClient.GetAsync(url, cancellationToken);
+                
+                // Handle quota exceeded
+                if (response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                {
+                    var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                    if (IsQuotaExceededResponse(response, body))
+                    {
+                        HandleQuotaExceeded();
+                        return allVideos; // Return what we have so far
+                    }
+                }
+                
                 response.EnsureSuccessStatusCode();
                 _quotaTracker.RecordQuotaUsage("videos.list", 1); // videos.list = 1 unit
+                _apiStatus.RecordApiAvailable(); // API is working
                 
                 var json = await response.Content.ReadAsStringAsync(cancellationToken);
                 var result = JsonSerializer.Deserialize<VideosResponse>(json);

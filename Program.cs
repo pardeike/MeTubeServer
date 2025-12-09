@@ -69,6 +69,7 @@ builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
 builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddSingleton<YouTubeQuotaTracker>();
+builder.Services.AddSingleton<YouTubeApiStatusService>();
 builder.Services.AddSingleton<BackgroundJobHealthCheck>();
 builder.Services.AddSingleton<MetricsService>();
 builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
@@ -81,6 +82,7 @@ builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
 builder.Services.AddHostedService<ChannelCleanupJob>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeApiStatusService>());
 
 // Add rate limiting (#3)
 builder.Services.AddRateLimiter(options =>
@@ -144,6 +146,7 @@ using (var scope = app.Services.CreateScope())
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
     var youtubeOptions = scope.ServiceProvider.GetRequiredService<IOptions<YouTubeOptions>>().Value;
     var youtubeService = scope.ServiceProvider.GetRequiredService<YouTubeApiService>();
+    var apiStatusService = scope.ServiceProvider.GetRequiredService<YouTubeApiStatusService>();
     
     // Create/migrate database (#38)
     try
@@ -158,13 +161,25 @@ using (var scope = app.Services.CreateScope())
     }
     
     // Validate YouTube API key (#2)
+    // Note: Server will start even if quota is exceeded. The YouTubeApiStatusService
+    // will track the quota status and periodically check for recovery.
     try
     {
-        var isValid = await youtubeService.ValidateApiKeyAsync();
+        var isValid = await youtubeService.ValidateApiKeyAsync(default, skipStatusCheck: true);
         if (!isValid)
         {
-            logger.LogError("YouTube API key validation failed. Please check your configuration");
-            throw new InvalidOperationException("Invalid YouTube API key");
+            // Check if this is a quota issue - if so, just warn and continue
+            if (!apiStatusService.IsApiAvailable)
+            {
+                logger.LogWarning("YouTube API quota exceeded at startup. Server will start, but API calls will be suspended until quota is released. " +
+                    "The service will automatically resume API calls when quota becomes available (resets at midnight Pacific Time).");
+            }
+            else
+            {
+                // Validation failed for a non-quota reason (invalid API key)
+                logger.LogError("YouTube API key validation failed. Please check your configuration");
+                throw new InvalidOperationException("Invalid YouTube API key");
+            }
         }
     }
     catch (Exception ex) when (ex is not InvalidOperationException)
@@ -204,7 +219,7 @@ if (app.Environment.IsDevelopment())
 }
 
 // Health check endpoints (#21)
-app.MapGet("/health", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker) =>
+app.MapGet("/health", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker, YouTubeApiStatusService apiStatus) =>
 {
     try
     {
@@ -239,6 +254,11 @@ app.MapGet("/health", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracke
                 remaining = quotaStats.Remaining,
                 limit = quotaStats.Limit,
                 percentUsed = Math.Round(quotaStats.PercentUsed, 1)
+            },
+            youtubeApi = new
+            {
+                available = apiStatus.IsApiAvailable,
+                quotaExceededAt = apiStatus.GetQuotaExceededAt()
             }
         });
     }
@@ -250,7 +270,7 @@ app.MapGet("/health", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracke
 .WithName("HealthCheck");
 
 // Detailed health check with stats
-app.MapGet("/health/details", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker) =>
+app.MapGet("/health/details", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker, YouTubeApiStatusService apiStatus) =>
 {
     try
     {
@@ -286,6 +306,11 @@ app.MapGet("/health/details", async (MeTubeDbContext db, YouTubeQuotaTracker quo
                 limit = quotaStats.Limit,
                 percentUsed = Math.Round(quotaStats.PercentUsed, 1),
                 date = quotaStats.Date.ToString("yyyy-MM-dd")
+            },
+            youtubeApi = new
+            {
+                available = apiStatus.IsApiAvailable,
+                quotaExceededAt = apiStatus.GetQuotaExceededAt()
             }
         });
     }
