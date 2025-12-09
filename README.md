@@ -144,7 +144,7 @@ cloudflared tunnel --url http://localhost:5000 run metubeserver
 ### Health Check
 
 #### `GET /health`
-Health check endpoint for monitoring server status.
+Health check endpoint for monitoring server status and quota usage.
 
 **Response (Healthy):**
 ```json
@@ -155,6 +155,12 @@ Health check endpoint for monitoring server status.
     "channels": 10,
     "users": 5,
     "videos": 250
+  },
+  "quota": {
+    "used": 4920,
+    "remaining": 5080,
+    "limit": 10000,
+    "percentUsed": 49.2
   }
 }
 ```
@@ -164,6 +170,29 @@ Health check endpoint for monitoring server status.
 {
   "status": "unhealthy",
   "message": "Database connection failed"
+}
+```
+
+#### `GET /health/details`
+Detailed health check with additional quota date information.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-12-06T12:00:00Z",
+  "stats": {
+    "channels": 10,
+    "users": 5,
+    "videos": 250
+  },
+  "quota": {
+    "used": 4920,
+    "remaining": 5080,
+    "limit": 10000,
+    "percentUsed": 49.2,
+    "date": "2025-12-06"
+  }
 }
 ```
 
@@ -309,13 +338,23 @@ Videos
 
 ## Quota Management
 
-The server minimizes YouTube API quota usage:
-- **WebSub subscriptions**: No quota cost (push-based)
+The server minimizes YouTube API quota usage through caching and WebSub push notifications:
+- **WebSub subscriptions**: No quota cost (push-based, real-time updates)
 - **channels.list**: 1 unit per channel (one-time per channel)
 - **playlistItems.list**: 1 unit per call (periodic reconciliation only)
 - **videos.list**: 1 unit per call (batched up to 50 video IDs)
 
-Estimated quota for 100 channels with 5 videos/day: ~500 units/day (well under the 10,000 daily free tier).
+**Daily Usage Examples:**
+- 10 channels, 2 videos/day: ~583 units/day (5.8% of 10,000 limit)
+- 100 channels, 5 videos/day: ~4,920 units/day (49% of limit)
+- 200 channels, 5 videos/day: ~9,740 units/day (97% of limit) ⚠️
+
+**Monitoring:**
+- Check quota usage via `/health` or `/health/details` endpoints
+- Quota information includes: used, remaining, limit, and percentage
+- Server logs warnings when usage exceeds 80%
+
+📖 **For detailed quota information, optimization strategies, and troubleshooting, see [QUOTA.md](QUOTA.md)**
 
 ## Logging
 
@@ -352,6 +391,16 @@ Log levels can be configured in `appsettings.json`.
 2. Verify YouTube API key is valid and has quota
 3. Check `LastSeenPublishedAt` timestamps in database
 4. Run reconciliation manually to backfill
+
+### Quota issues
+1. Check current usage: `curl http://localhost:5000/health`
+2. Review logs for high-cost operations: `grep "quota" logs/*.log`
+3. If near limit (>80%), consider:
+   - Adjusting reconciliation frequency (see [QUOTA.md](QUOTA.md))
+   - Requesting quota increase from Google
+4. Quota resets daily at midnight Pacific Time
+
+For detailed quota troubleshooting, see [QUOTA.md](QUOTA.md).
 
 ### Database errors
 1. Ensure write permissions for SQLite database file
