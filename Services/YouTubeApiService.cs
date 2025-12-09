@@ -31,15 +31,16 @@ public class YouTubeApiService
     /// <summary>
     /// Checks if the API response indicates a quota exceeded error.
     /// </summary>
-    private bool IsQuotaExceededResponse(HttpResponseMessage response, string? body = null)
+    private static bool IsQuotaExceededResponse(HttpResponseMessage response, string? body = null)
     {
         if (response.StatusCode != System.Net.HttpStatusCode.Forbidden)
             return false;
 
-        // If we have the body, check for quota-specific error
+        // If we have the body, check for quota-specific error (case-insensitive)
         if (!string.IsNullOrEmpty(body))
         {
-            return body.Contains("quotaExceeded") || body.Contains("youtube.quota");
+            return body.Contains("quotaExceeded", StringComparison.OrdinalIgnoreCase) || 
+                   body.Contains("youtube.quota", StringComparison.OrdinalIgnoreCase);
         }
 
         return false;

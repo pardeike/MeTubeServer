@@ -133,7 +133,7 @@ public class YouTubeApiStatusService : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    private async void CheckQuotaRecovery(object? state)
+    private void CheckQuotaRecovery(object? state)
     {
         // Only check if API is currently marked as unavailable
         if (IsApiAvailable)
@@ -148,6 +148,12 @@ public class YouTubeApiStatusService : IHostedService, IDisposable
 
         _logger.LogInformation("Day has rolled over since quota was exceeded. Checking if API is available...");
 
+        // Fire and forget the async work with proper error handling
+        _ = CheckQuotaRecoveryAsync();
+    }
+
+    private async Task CheckQuotaRecoveryAsync()
+    {
         try
         {
             // Create a scope to get the YouTubeApiService
@@ -156,7 +162,7 @@ public class YouTubeApiStatusService : IHostedService, IDisposable
             
             // Try to validate the API key - this will call the API
             // Pass skipStatusCheck: true to allow the API call even though we're marked as unavailable
-            var isValid = await youtubeApi.ValidateApiKeyAsync(default, skipStatusCheck: true);
+            var isValid = await youtubeApi.ValidateApiKeyAsync(CancellationToken.None, skipStatusCheck: true);
             
             if (isValid)
             {
