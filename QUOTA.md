@@ -88,7 +88,7 @@ Returns basic health status including quota:
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00Z",
+  "timestamp": "2025-12-06T10:30:00Z",
   "stats": {
     "channels": 100,
     "users": 25,
@@ -108,7 +108,7 @@ Returns detailed health information including quota date:
 ```json
 {
   "status": "healthy",
-  "timestamp": "2024-01-15T10:30:00Z",
+  "timestamp": "2025-12-06T10:30:00Z",
   "stats": {
     "channels": 100,
     "users": 25,
@@ -119,7 +119,7 @@ Returns detailed health information including quota date:
     "remaining": 5080,
     "limit": 10000,
     "percentUsed": 49.2,
-    "date": "2024-01-15"
+    "date": "2025-12-06"
   }
 }
 ```
@@ -137,7 +137,7 @@ Example log entries:
 [DBG] YouTube API quota usage: 4500/10000 units (45.0%) - Operation: playlistItems.list
 [WRN] YouTube API quota usage high: 8200/10000 units (82.0%) - Operation: channels.list
 [WRN] YouTube API quota limit reached! Used: 10000/10000 units
-[INF] YouTube API quota reset for new day: 2024-01-16
+[INF] YouTube API quota reset for new day: 2025-12-07
 ```
 
 ## Optimization Strategies

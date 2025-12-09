@@ -67,6 +67,7 @@ builder.Services.AddHttpClient<WebSubService>()
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
+builder.Services.AddScoped<ReconciliationService>();
 builder.Services.AddSingleton<YouTubeQuotaTracker>();
 builder.Services.AddSingleton<BackgroundJobHealthCheck>();
 builder.Services.AddSingleton<MetricsService>();
@@ -76,10 +77,9 @@ builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
     return new BackgroundTaskQueue(options.BackgroundTaskQueueCapacity);
 });
 
-// Add background jobs
+// Add background jobs (ReconciliationJob removed - now on-demand via API)
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
-builder.Services.AddHostedService<ReconciliationJob>();
 builder.Services.AddHostedService<ChannelCleanupJob>();
 
 // Add rate limiting (#3)
@@ -630,6 +630,46 @@ app.MapPost("/api/users/{appUserId}/channels", async (
     }
 })
 .WithName("RegisterChannels")
+.RequireRateLimiting("fixed");
+
+// On-demand reconciliation endpoint (#quota-optimization)
+app.MapPost("/api/users/{appUserId}/reconcile", async (
+    string appUserId,
+    MeTubeDbContext db,
+    ReconciliationService reconciliationService,
+    ILogger<Program> logger) =>
+{
+    try
+    {
+        // Validate user exists
+        var user = await db.Users.FirstOrDefaultAsync(u => u.AppUserId == appUserId);
+        if (user == null)
+        {
+            logger.LogWarning("Reconcile requested for unknown user {UserId}", appUserId);
+            return Results.NotFound(new { message = "User not found" });
+        }
+
+        // Perform reconciliation
+        var newVideosCount = await reconciliationService.ReconcileUserChannelsAsync(
+            user.Id, 
+            db);
+
+        logger.LogInformation("Reconciled {Count} new videos for user {UserId}", 
+            newVideosCount, appUserId);
+
+        return Results.Ok(new 
+        { 
+            message = "Reconciliation completed", 
+            newVideosCount = newVideosCount 
+        });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error reconciling channels for user {UserId}", appUserId);
+        return Results.Problem("Failed to reconcile channels");
+    }
+})
+.WithName("ReconcileUserChannels")
 .RequireRateLimiting("fixed");
 
 app.MapGet("/api/users/{appUserId}/feed", async (
