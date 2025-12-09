@@ -33,18 +33,20 @@ For each channel:
 
 **Quota Impact**: High - every app instance polls YouTube independently.
 
-**New (Hub Server)**:
+**New (Hub Server with On-Demand Reconciliation)**:
 ```
 MeTube App → Hub Server → Display Videos
      ↓              ↓
 User OAuth    YouTube WebSub + Data API
      ↓              ↓
 Send channel IDs → Shared cache
+     ↓              ↓
+Pull-to-refresh → On-demand reconciliation (backup)
                     ↓
                 One subscription per channel
 ```
 
-**Quota Impact**: Minimal - server caches everything, WebSub provides real-time updates.
+**Quota Impact**: Minimal - server caches everything, WebSub provides real-time updates, reconciliation only when users actively refresh.
 
 ### Responsibilities
 
@@ -52,13 +54,14 @@ Send channel IDs → Shared cache
 - User authentication (Google OAuth)
 - Get user's subscribed channel IDs from YouTube
 - Send channel IDs to hub server
+- **Call reconciliation endpoint on pull-to-refresh and foreground transition**
 - Fetch and display aggregated feed from hub
 - Local caching and UI
 
 **Hub Server Responsibilities**:
 - Subscribe to WebSub for channels
-- Receive push notifications
-- Reconcile missed updates
+- Receive push notifications (real-time, no quota)
+- **Reconcile on-demand when app requests it**
 - Cache video metadata
 - Serve aggregated feed
 
@@ -275,7 +278,86 @@ func syncSubscriptions() async throws {
 
 ---
 
-### Endpoint 3: Get Feed
+### Endpoint 3: Reconcile Channels (On-Demand)
+
+**Purpose**: Trigger reconciliation to check for videos that may have been missed by WebSub. Call this on pull-to-refresh or when app comes to foreground.
+
+```
+POST /api/users/{userId}/reconcile
+```
+
+**Response**:
+```json
+{
+  "message": "Reconciliation completed",
+  "newVideosCount": 5
+}
+```
+
+**Swift Implementation**:
+```swift
+struct ReconcileResponse: Codable {
+    let message: String
+    let newVideosCount: Int
+}
+
+func reconcileChannels(userId: String) async throws -> Int {
+    let url = URL(string: "\(HubConfig.baseURL)/api/users/\(userId)/reconcile")!
+    var request = URLRequest(url: url)
+    request.httpMethod = "POST"
+    
+    let (data, response) = try await URLSession.shared.data(for: request)
+    
+    guard let httpResponse = response as? HTTPURLResponse,
+          httpResponse.statusCode == 200 else {
+        throw HubError.reconciliationFailed
+    }
+    
+    let result = try JSONDecoder().decode(ReconcileResponse.self, from: data)
+    print("Reconciliation: \(result.message), found \(result.newVideosCount) new videos")
+    return result.newVideosCount
+}
+```
+
+**When to Call**:
+- On pull-to-refresh gesture
+- When app comes to foreground (after being in background)
+- After registering new channels (optional, to get immediate results)
+
+**Important**: This is the primary mechanism for discovering videos. The server no longer automatically polls YouTube every 30 minutes. WebSub provides real-time updates for most videos, but reconciliation catches any that were missed.
+
+**Rate Limiting**: The endpoint is rate-limited. Don't call it more than once every 15 minutes per user.
+
+**Quota Impact**: 1 unit per channel × number of user's channels. This replaces the old automatic reconciliation which consumed 48× more quota.
+
+**Example Usage**:
+```swift
+class VideoFeedManager {
+    private var lastReconcile: Date?
+    private let reconcileInterval: TimeInterval = 15 * 60 // 15 minutes
+    
+    func refreshFeed() async throws -> [Video] {
+        // 1. Reconcile if needed (rate-limited)
+        if shouldReconcile() {
+            let newCount = try await reconcileChannels(userId: userManager.userId)
+            lastReconcile = Date()
+            print("Found \(newCount) new videos")
+        }
+        
+        // 2. Fetch feed
+        return try await fetchFeed(userId: userManager.userId)
+    }
+    
+    private func shouldReconcile() -> Bool {
+        guard let last = lastReconcile else { return true }
+        return Date().timeIntervalSince(last) >= reconcileInterval
+    }
+}
+```
+
+---
+
+### Endpoint 4: Get Feed
 
 **Purpose**: Retrieve aggregated videos from all subscribed channels.
 
@@ -953,10 +1035,11 @@ let session = URLSession(configuration: config)
 **Causes**:
 1. Channels haven't published videos recently
 2. WebSub hasn't received notifications yet
-3. Reconciliation job hasn't run yet
+3. **Reconciliation hasn't been triggered yet (app must call reconciliation endpoint)**
 
 **Solution**:
-- Wait 30-60 minutes for reconciliation job
+- **Call the reconciliation endpoint**: `POST /api/users/{userId}/reconcile`
+- Wait for WebSub to deliver notifications (usually within seconds of video publish)
 - Check hub server logs
 - Verify channels are actually active on YouTube
 
@@ -977,11 +1060,14 @@ try await manager.fetchFeed(userId: userId)
 
 **Symptom**: Videos are old, not seeing recent uploads.
 
-**Cause**: App is showing cached data without refreshing.
+**Causes**: 
+1. App is showing cached data without refreshing
+2. **Not calling reconciliation endpoint on pull-to-refresh**
 
 **Solution**:
-- Always use `since` parameter with last refresh time
-- Pull-to-refresh should fetch with `since = lastRefreshTime`
+- **Always call reconciliation endpoint on pull-to-refresh**: `POST /api/users/{userId}/reconcile`
+- Use `since` parameter with last refresh time when fetching feed
+- Pull-to-refresh should: 1) reconcile, then 2) fetch with `since = lastRefreshTime`
 - Don't rely only on cached data
 
 ### Performance Issues
