@@ -204,7 +204,7 @@ if (app.Environment.IsDevelopment())
 }
 
 // Health check endpoints (#21)
-app.MapGet("/health", async (MeTubeDbContext db) =>
+app.MapGet("/health", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker) =>
 {
     try
     {
@@ -219,6 +219,9 @@ app.MapGet("/health", async (MeTubeDbContext db) =>
         var channelCount = await db.Channels.CountAsync();
         var userCount = await db.Users.CountAsync();
         var videoCount = await db.Videos.CountAsync();
+        
+        // Get quota stats
+        var quotaStats = quotaTracker.GetQuotaStats();
 
         return Results.Ok(new
         {
@@ -229,6 +232,13 @@ app.MapGet("/health", async (MeTubeDbContext db) =>
                 channels = channelCount,
                 users = userCount,
                 videos = videoCount
+            },
+            quota = new
+            {
+                used = quotaStats.Used,
+                remaining = quotaStats.Remaining,
+                limit = quotaStats.Limit,
+                percentUsed = Math.Round(quotaStats.PercentUsed, 1)
             }
         });
     }
@@ -240,7 +250,7 @@ app.MapGet("/health", async (MeTubeDbContext db) =>
 .WithName("HealthCheck");
 
 // Detailed health check with stats
-app.MapGet("/health/details", async (MeTubeDbContext db) =>
+app.MapGet("/health/details", async (MeTubeDbContext db, YouTubeQuotaTracker quotaTracker) =>
 {
     try
     {
@@ -255,6 +265,9 @@ app.MapGet("/health/details", async (MeTubeDbContext db) =>
         var channelCount = await db.Channels.CountAsync();
         var userCount = await db.Users.CountAsync();
         var videoCount = await db.Videos.CountAsync();
+        
+        // Get quota stats
+        var quotaStats = quotaTracker.GetQuotaStats();
 
         return Results.Ok(new
         {
@@ -265,6 +278,14 @@ app.MapGet("/health/details", async (MeTubeDbContext db) =>
                 channels = channelCount,
                 users = userCount,
                 videos = videoCount
+            },
+            quota = new
+            {
+                used = quotaStats.Used,
+                remaining = quotaStats.Remaining,
+                limit = quotaStats.Limit,
+                percentUsed = Math.Round(quotaStats.PercentUsed, 1),
+                date = quotaStats.Date.ToString("yyyy-MM-dd")
             }
         });
     }

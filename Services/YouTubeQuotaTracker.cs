@@ -92,4 +92,78 @@ public class YouTubeQuotaTracker
     {
         return GetRemainingQuota() >= requiredUnits;
     }
+
+    /// <summary>
+    /// Gets the daily quota limit.
+    /// </summary>
+    /// <returns>Daily quota limit in units</returns>
+    public int GetDailyQuotaLimit()
+    {
+        return DailyQuotaLimit;
+    }
+
+    /// <summary>
+    /// Gets the percentage of quota used today.
+    /// </summary>
+    /// <returns>Percentage of quota used (0-100)</returns>
+    public double GetQuotaUsedPercentage()
+    {
+        var used = GetQuotaUsedToday();
+        return (used * 100.0) / DailyQuotaLimit;
+    }
+
+    /// <summary>
+    /// Gets comprehensive quota statistics.
+    /// </summary>
+    /// <returns>Quota statistics object</returns>
+    public QuotaStats GetQuotaStats()
+    {
+        lock (_lock)
+        {
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            var used = (today == _quotaDate) ? _quotaUsedToday : 0;
+            var remaining = Math.Max(0, DailyQuotaLimit - used);
+            var percentUsed = (used * 100.0) / DailyQuotaLimit;
+
+            return new QuotaStats
+            {
+                Used = used,
+                Remaining = remaining,
+                Limit = DailyQuotaLimit,
+                PercentUsed = percentUsed,
+                Date = today
+            };
+        }
+    }
+}
+
+/// <summary>
+/// Represents YouTube API quota statistics.
+/// </summary>
+public class QuotaStats
+{
+    /// <summary>
+    /// Number of quota units used today.
+    /// </summary>
+    public int Used { get; set; }
+
+    /// <summary>
+    /// Number of quota units remaining today.
+    /// </summary>
+    public int Remaining { get; set; }
+
+    /// <summary>
+    /// Daily quota limit.
+    /// </summary>
+    public int Limit { get; set; }
+
+    /// <summary>
+    /// Percentage of quota used (0-100).
+    /// </summary>
+    public double PercentUsed { get; set; }
+
+    /// <summary>
+    /// Date for which these statistics apply.
+    /// </summary>
+    public DateOnly Date { get; set; }
 }
