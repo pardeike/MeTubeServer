@@ -11,10 +11,23 @@ public class YouTubeQuotaTracker
     private DateOnly _quotaDate = DateOnly.FromDateTime(DateTime.UtcNow);
     private readonly object _lock = new();
     private const int DailyQuotaLimit = 10000;
+    
+    // Cache the Pacific Time zone since it doesn't change
+    private static readonly TimeZoneInfo PacificTimeZone = 
+        TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
 
     public YouTubeQuotaTracker(ILogger<YouTubeQuotaTracker> logger)
     {
         _logger = logger;
+    }
+    
+    /// <summary>
+    /// Gets the current date in Pacific Time (YouTube quota resets at midnight PT).
+    /// </summary>
+    private static DateOnly GetPacificToday()
+    {
+        var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, PacificTimeZone);
+        return DateOnly.FromDateTime(pacificTime);
     }
 
     /// <summary>
@@ -26,10 +39,7 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            // YouTube API quotas reset at midnight Pacific Time
-            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
-            var today = DateOnly.FromDateTime(pacificTime);
+            var today = GetPacificToday();
             
             if (today != _quotaDate)
             {
@@ -69,10 +79,7 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            // YouTube API quotas reset at midnight Pacific Time
-            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
-            var today = DateOnly.FromDateTime(pacificTime);
+            var today = GetPacificToday();
             
             if (today != _quotaDate)
             {
@@ -128,10 +135,7 @@ public class YouTubeQuotaTracker
     {
         lock (_lock)
         {
-            // YouTube API quotas reset at midnight Pacific Time
-            var pacificTimeZone = TimeZoneInfo.FindSystemTimeZoneById("America/Los_Angeles");
-            var pacificTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, pacificTimeZone);
-            var today = DateOnly.FromDateTime(pacificTime);
+            var today = GetPacificToday();
             
             var used = (today == _quotaDate) ? _quotaUsedToday : 0;
             var remaining = Math.Max(0, DailyQuotaLimit - used);
