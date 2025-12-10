@@ -101,7 +101,7 @@ public class ReconciliationService
                 continue;
             }
 
-            var newVideos = 0;
+            int newVideos = 0;
             try
             {
                 newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
