@@ -76,7 +76,7 @@ public class ReconciliationService
             var bucket = DetermineActivityBucket(cadence.LastUploadAt, now);
             bucketCounts[bucket] += 1;
 
-            var baseInterval = ComputeBaseInterval(cadence.CadenceEma, bucket);
+            var baseInterval = ComputeBaseInterval(cadence.CadenceEma);
             state = GetOrCreateState(channel, baseInterval, cadence, state);
 
             if (!ShouldReconcileChannel(channel, state, cadence, now, out var waitTime, out var reason))
@@ -114,7 +114,7 @@ public class ReconciliationService
             }
             finally
             {
-                UpdateReconcileState(channel, state, now, cadence, bucket, baseInterval, newVideos > 0);
+                UpdateReconcileState(channel, state, now, cadence, baseInterval, newVideos > 0);
             }
         }
 
@@ -332,14 +332,13 @@ public class ReconciliationService
         ChannelReconcileState state,
         DateTimeOffset checkedAt,
         ChannelCadence cadence,
-        ActivityBucket bucket,
         TimeSpan baseInterval,
         bool foundNewVideos)
     {
         var consecutiveMisses = foundNewVideos
             ? ReduceEmptyStreak(state.ConsecutiveNoNewVideos, state.Interval)
             : state.ConsecutiveNoNewVideos + 1;
-        var adaptiveInterval = CalculateAdaptiveInterval(baseInterval, bucket, consecutiveMisses);
+        var adaptiveInterval = CalculateAdaptiveInterval(baseInterval, consecutiveMisses);
 
         _channelReconcileStates[channel.Id] = state with
         {
@@ -350,22 +349,19 @@ public class ReconciliationService
         };
     }
 
-    internal TimeSpan ComputeBaseInterval(TimeSpan cadenceEma, ActivityBucket bucket)
+    internal TimeSpan ComputeBaseInterval(TimeSpan cadenceEma)
     {
         var adjustedCadence = TimeSpan.FromTicks((long)(cadenceEma.Ticks * _settings.CadenceMultiplier));
-        var intervals = GetBucketIntervals(bucket);
-        return Clamp(adjustedCadence, intervals.Min, intervals.Max);
+        return Clamp(adjustedCadence, _settings.BaseIntervalMin, _settings.BaseIntervalMax);
     }
 
-    internal TimeSpan CalculateAdaptiveInterval(TimeSpan baseInterval, ActivityBucket bucket, int consecutiveMisses)
+    internal TimeSpan CalculateAdaptiveInterval(TimeSpan baseInterval, int consecutiveMisses)
     {
-        var cappedMisses = Math.Min(consecutiveMisses, 4);
-        var multiplier = 1 + cappedMisses * 0.5;
-        var scaledTicks = (long)(baseInterval.Ticks * multiplier);
-        var intervals = GetBucketIntervals(bucket);
+        var cappedMisses = Math.Min(consecutiveMisses, 6);
+        var multiplier = 1 + cappedMisses;
+        var scaledTicks = baseInterval.Ticks * multiplier;
         var scaled = TimeSpan.FromTicks(scaledTicks);
-        var clamped = Clamp(scaled, baseInterval, intervals.BackoffMax);
-        return clamped;
+        return scaled > _settings.MaxAdaptiveInterval ? _settings.MaxAdaptiveInterval : scaled;
     }
 
     internal static int ReduceEmptyStreak(int currentStreak, TimeSpan previousInterval)
@@ -426,14 +422,6 @@ public class ReconciliationService
 
         return true;
     }
-
-    private ActivityBucketIntervals GetBucketIntervals(ActivityBucket bucket) => bucket switch
-    {
-        ActivityBucket.Hot => _settings.Hot,
-        ActivityBucket.Warm => _settings.Warm,
-        ActivityBucket.Cold => _settings.Cold,
-        _ => _settings.Frozen
-    };
 
     internal sealed record ChannelCadence(TimeSpan CadenceEma, TimeSpan? MedianGap, DateTimeOffset? LastUploadAt);
 

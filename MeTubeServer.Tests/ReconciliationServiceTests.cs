@@ -22,30 +22,27 @@ public class ReconciliationServiceTests
     }
 
     [Fact]
-    public void ComputeBaseInterval_ClampsPerBucket()
+    public void ComputeBaseInterval_ClampsToDefaults()
     {
         var service = CreateService();
 
-        var hotBase = service.ComputeBaseInterval(TimeSpan.FromDays(4), ActivityBucket.Hot);
-        Assert.True(hotBase >= TimeSpan.FromHours(6) && hotBase <= TimeSpan.FromHours(24));
+        var baseInterval = service.ComputeBaseInterval(TimeSpan.FromDays(40));
+        Assert.Equal(TimeSpan.FromDays(14), baseInterval);
 
-        var coldBase = service.ComputeBaseInterval(TimeSpan.FromDays(40), ActivityBucket.Cold);
-        Assert.InRange(coldBase, TimeSpan.FromDays(7), TimeSpan.FromDays(14));
-
-        var frozenBase = service.ComputeBaseInterval(TimeSpan.FromDays(90), ActivityBucket.Frozen);
-        Assert.InRange(frozenBase, TimeSpan.FromDays(30), TimeSpan.FromDays(60));
+        baseInterval = service.ComputeBaseInterval(TimeSpan.FromHours(1));
+        Assert.Equal(TimeSpan.FromHours(12), baseInterval);
     }
 
     [Fact]
-    public void CalculateAdaptiveInterval_RespectsBucketCeilings()
+    public void CalculateAdaptiveInterval_UsesSevenXCap()
     {
         var service = CreateService();
 
-        var hotInterval = service.CalculateAdaptiveInterval(TimeSpan.FromDays(1), ActivityBucket.Hot, 4);
-        Assert.True(hotInterval <= TimeSpan.FromDays(7));
+        var interval = service.CalculateAdaptiveInterval(TimeSpan.FromDays(1), 4);
+        Assert.Equal(TimeSpan.FromDays(5), interval);
 
-        var frozenInterval = service.CalculateAdaptiveInterval(TimeSpan.FromDays(45), ActivityBucket.Frozen, 4);
-        Assert.Equal(TimeSpan.FromDays(60), frozenInterval);
+        interval = service.CalculateAdaptiveInterval(TimeSpan.FromDays(10), 6);
+        Assert.Equal(TimeSpan.FromDays(30), interval);
     }
 
     [Fact]
