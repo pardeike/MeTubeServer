@@ -24,41 +24,38 @@ YouTube Data API v3 provides a **daily quota of 10,000 units** for free tier pro
 
 ## Daily Quota Calculation Examples
 
-**Note:** These examples now reflect the adaptive reconciliation strategy implemented in the server.
+**Note:** These examples reflect the adaptive reconciliation strategy. By default, reconciliation 
+is client-initiated (when app is used), so actual usage will be lower than these estimates which 
+assume background reconciliation is enabled.
 
-### Example 1: Small Server (10 channels, 2 videos/day each)
+### Example 1: Small Server (10 channels, 2 videos/day each) - Client-Initiated
 ```
 Startup:              100 units (one-time)
-Reconciliation:       ~50 units/day (adaptive based on activity)
-  - 5 channels with WebSub working: 0 units
-  - 3 high-activity channels: 36 units (12x/day)
-  - 2 low-activity channels: 10 units (5x/day)
+Reconciliation:       ~20-50 units/day (only when clients check)
+  - Depends on user activity patterns
+  - Adaptive throttling prevents excessive polling
 Video enrichment:     20 videos/day ÷ 50 per batch = 1 unit/day
 New channel overhead: ~2 units (occasional)
 ──────────────────────────────────────────────────
-Total:                ~153 units/day (1.5% of limit) ✓
-Savings vs old approach: 430 units/day saved (74% reduction)
+Total:                ~123-153 units/day (1.2-1.5% of limit) ✓
 ```
 
-### Example 2: Medium Server (100 channels, 5 videos/day each)
+### Example 2: Medium Server (100 channels, 5 videos/day each) - Client-Initiated
 ```
 Startup:              100 units (one-time)
-Reconciliation:       ~1,200 units/day (adaptive based on activity)
-  - 50 channels with WebSub working: 0 units
-  - 10 high-activity channels: 120 units (12x/day)
-  - 20 medium-activity channels: 400 units (2x/day)
-  - 20 low-activity channels: 100 units (0.5x/day)
+Reconciliation:       ~200-600 units/day (only when clients check)
+  - Depends on user activity patterns
+  - Adaptive throttling prevents excessive polling
 Video enrichment:     500 videos/day ÷ 50 per batch = 10 units/day
 New channel overhead: ~10 units (occasional)
 ──────────────────────────────────────────────────
-Total:                ~1,320 units/day (13.2% of limit) ✓
-Savings vs old approach: 3,600 units/day saved (73% reduction)
+Total:                ~310-720 units/day (3.1-7.2% of limit) ✓
 ```
 
-### Example 3: Large Server (200 channels, 5 videos/day each)
+### Example 3: Large Server (200 channels, 5 videos/day each) - With Background Job
 ```
 Startup:              100 units (one-time)
-Reconciliation:       ~2,400 units/day (adaptive based on activity)
+Reconciliation:       ~2,400 units/day (background job enabled)
   - 100 channels with WebSub working: 0 units
   - 20 high-activity channels: 240 units (12x/day)
   - 40 medium-activity channels: 800 units (2x/day)
@@ -70,9 +67,9 @@ Total:                ~2,540 units/day (25.4% of limit) ✓
 Savings vs old approach: 7,200 units/day saved (74% reduction)
 ```
 
-**Key Insight:** The adaptive reconciliation system reduces quota usage by 70-75% compared to 
-the fixed 30-minute interval approach, while maintaining video freshness through WebSub 
-notifications and smart polling.
+**Key Insight:** Client-initiated reconciliation (default) uses significantly less quota than 
+background reconciliation, while the adaptive throttling system reduces quota usage by 70-75% 
+compared to fixed 30-minute intervals when background reconciliation is enabled.
 
 ## When Quota Limits Are Exceeded
 
@@ -169,20 +166,32 @@ Example log entries:
 - Check that your callback URL is publicly accessible via HTTPS
 - The server automatically skips reconciliation for channels with recent WebSub notifications
 
-### 2. Adaptive Reconciliation (Automatic)
-The reconciliation job now automatically adjusts frequency based on channel activity:
+### 2. Client-Initiated Reconciliation (Default)
+By default, reconciliation happens when clients request it via the API:
 
 **How it works:**
-- Channels that publish daily or more: Reconciled every 2 hours (12x/day)
-- Channels that publish weekly: Reconciled every 12 hours (2x/day)
-- Channels that publish monthly: Reconciled every 2 days (0.5x/day)
-- Inactive channels (30+ days between videos): Reconciled every 7 days (0.14x/day)
-- Channels with recent WebSub notifications: Skipped entirely (0x/day)
+- Clients call `/api/users/{appUserId}/reconcile` when app is opened or comes to foreground
+- Rate limiting prevents excessive API usage
+- Adaptive throttling applies: channels are reconciled based on their publishing patterns
+  - High-activity channels: max every 2 hours
+  - Medium-activity channels: max every 12 hours
+  - Low-activity channels: max every 2 days
+  - Inactive channels: max every 7 days
+- Channels with recent WebSub notifications are skipped entirely
+
+**Benefits:**
+- Zero quota usage when users are not active
+- Reconciliation only when needed
+- No background job overhead
+
+### 3. Automatic Background Reconciliation (Optional)
+For servers that need automatic reconciliation, enable the background job:
 
 **Configuration** (in `appsettings.json`):
 ```json
 {
   "Hub": {
+    "EnableBackgroundReconciliation": true,
     "ReconciliationBaseIntervalMinutes": 60,
     "ReconciliationHighActivityMultiplier": 2.0,
     "ReconciliationMediumActivityMultiplier": 12.0,
@@ -195,7 +204,12 @@ The reconciliation job now automatically adjusts frequency based on channel acti
 }
 ```
 
-**Quota Impact:**
+**When background reconciliation runs:**
+- Evaluates all channels every hour (configurable)
+- Applies same adaptive logic as client-initiated reconciliation
+- Useful for servers with no active clients or for ensuring freshness
+
+**Quota Impact (with background reconciliation enabled):**
 - Old approach: ~9,600 units/day for 200 channels (48x/day × 200)
 - New approach: ~2,000-2,500 units/day for 200 channels (70-75% reduction)
   - 50% of channels skip via WebSub = 0 units
@@ -203,7 +217,7 @@ The reconciliation job now automatically adjusts frequency based on channel acti
   - 20% medium-activity = 800 units (2x/day × 40 channels)
   - 20% low-activity = 200 units (0.5x/day × 40 channels)
 
-### 3. Manual Tuning (Advanced)
+### 4. Manual Tuning (Advanced)
 For fine-tuned control, adjust the multipliers:
 - Increase multipliers to reduce reconciliation frequency further
 - Decrease `ReconciliationBaseIntervalMinutes` to check more often (not recommended)
@@ -211,7 +225,7 @@ For fine-tuned control, adjust the multipliers:
 
 **Trade-off**: Longer intervals mean you may miss videos for longer if WebSub fails, but significantly reduce quota usage.
 
-### 3. Batch Operations
+### 5. Batch Operations
 - Video enrichment already batches up to 50 videos per API call
 - Channel metadata fetching is batched efficiently
 - These are already optimized

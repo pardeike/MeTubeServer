@@ -73,7 +73,14 @@ public class HubOptions
     public string CorsAllowedOrigins { get; set; } = string.Empty;
     
     /// <summary>
+    /// Enable automatic background reconciliation job. When false, reconciliation
+    /// only occurs via client-initiated API calls. Default is false.
+    /// </summary>
+    public bool EnableBackgroundReconciliation { get; set; } = false;
+    
+    /// <summary>
     /// Base interval for reconciliation job execution in minutes.
+    /// Only used when EnableBackgroundReconciliation is true.
     /// </summary>
     public int ReconciliationBaseIntervalMinutes { get; set; } = 60;
     

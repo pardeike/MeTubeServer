@@ -82,7 +82,13 @@ builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
 builder.Services.AddHostedService<ChannelCleanupJob>();
-builder.Services.AddHostedService<ReconciliationJob>();
+
+// Conditionally add ReconciliationJob based on configuration
+if (hubOptions.EnableBackgroundReconciliation)
+{
+    builder.Services.AddHostedService<ReconciliationJob>();
+}
+
 builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeApiStatusService>());
 
 // Add rate limiting (#3)
