@@ -98,17 +98,17 @@ YouTube API: playlistItems.list - 1 unit per channel
 - **Quota**: 1 unit × number of user's channels
 - **Frequency**: User-controlled (typically 1-10 times per day per user)
 
-#### Cadence-aware throttling (new)
-- **What**: Reconciliation now respects a per-channel interval derived from its upload cadence and automatically backs off when repeated checks find no new videos.
-- **Why**: Cuts unnecessary playlistItems calls (goal: >50% reduction) while still picking up occasional uploads.
+#### Cadence-aware throttling (updated)
+- **What**: Reconciliation now respects a per-channel interval derived from historical upload cadence (EMA of recent median gaps) and automatically backs off when repeated checks find no new videos.
+- **Why**: Cuts unnecessary playlistItems calls (goal: >50% reduction) while still picking up occasional uploads and bounding detection lag.
 - **How it works**:
-  - Base interval = time since last upload (e.g., 12h for active weeklies, 1d for typical channels, 14d+ for long-tail).
-  - Each time a reconciliation finds no new videos, the next interval scales up (base × 2, 3, … up to 7×, capped at 30 days). A new video resets to the base interval.
-  - Skipped channels are logged with the wait time until they become eligible again.
+  - Base interval = `clamp(EMA(median_gap) × c, 12h, 14d)`, with `c` currently 1.0. The EMA seeds from the most recent gaps across up to 10 videos and smooths with the previous run.
+  - Each time a reconciliation finds no new videos, the next interval scales up (base × 2, 3, … up to 7×, capped at 30 days). New uploads shrink the empty-streak multiplier instead of hard-resetting it (decrement for normal channels, halve for long-tail backoffs).
+  - A max detection lag is enforced: `next_check_at` is never later than `last_reconcile_at + MaxDetectionLag` (configurable, defaults to 7d). Skipped channels are logged with the wait time until they become eligible again.
 
 **Examples**
-- Weekly uploader (last seen 3 days ago): base interval = 12h. After two empty runs, next intervals become ~24h then ~36h. A new upload resets back to 12h.
-- Monthly uploader (last seen 40 days ago): base interval = 1d. With no new uploads, checks stretch to 2d → 3d → 4d until the cap. Any new video resets to 1d.
+- Weekly uploader with consistent gaps around 4d: EMA(median_gap) ≈ 4d → base interval clamps to 12h (floor). After two empty runs, next intervals become ~24h then ~36h; a new upload trims the streak but keeps some backoff for stability.
+- Monthly uploader (gaps ~33d): base interval clamps near 14d. Empty runs stretch checks to ~28d then 42d (capped by MaxDetectionLag enforcement if configured tighter). A comeback upload halves the empty streak so long-tail channels keep some cushion while recovering quickly.
 
 ### Daily Impact Examples
 Assuming users refresh 5 times per day on average:
