@@ -157,21 +157,29 @@ public class ReconciliationJob : BackgroundService
             return false;
         }
         
-        // If the channel has been inactive for a long time (e.g., longer than the low activity threshold),
-        // don't rely solely on WebSub - we should reconcile to detect if the channel became active again
-        if (channel.AveragePublishInterval.HasValue)
-        {
-            var inactivityThreshold = TimeSpan.FromDays(options.LowActivityThresholdDays);
-            if (channel.AveragePublishInterval.Value > inactivityThreshold)
-            {
-                // For inactive channels, don't skip reconciliation even with recent WebSub
-                return false;
-            }
-        }
-        
         // If WebSub notification was recent, we can trust it's working
         var timeSinceLastWebSub = DateTimeOffset.UtcNow - channel.LastWebSubNotification.Value;
         var threshold = TimeSpan.FromHours(options.WebSubReliabilityThresholdHours);
+        
+        // For inactive channels: if they haven't had WebSub activity in a long time,
+        // we should occasionally check if they became active (but still very infrequently)
+        // This handles the case where WebSub might have stopped working for a dormant channel
+        if (channel.AveragePublishInterval.HasValue)
+        {
+            var avgInterval = channel.AveragePublishInterval.Value;
+            
+            // If channel is very inactive (>30 days between videos) and WebSub is stale,
+            // don't skip - reconcile very infrequently to detect revival
+            if (avgInterval > TimeSpan.FromDays(options.LowActivityThresholdDays))
+            {
+                var staleThreshold = TimeSpan.FromDays(options.WebSubStaleThresholdDays);
+                if (timeSinceLastWebSub > staleThreshold)
+                {
+                    // WebSub seems stale for this inactive channel, don't skip
+                    return false;
+                }
+            }
+        }
         
         return timeSinceLastWebSub < threshold;
     }

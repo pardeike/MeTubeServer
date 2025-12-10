@@ -178,11 +178,13 @@ By default, reconciliation happens when clients request it via the API:
   - Low-activity channels: max every 2 days
   - Inactive channels: max every 7 days
 - Channels with recent WebSub notifications are skipped entirely
+- **Dead channels** (inactive + WebSub working): skipped until WebSub goes stale (30+ days)
 
 **Benefits:**
 - Zero quota usage when users are not active
 - Reconciliation only when needed
 - No background job overhead
+- **Minimal quota for dead channels** - if 80% of your channels are inactive, they consume almost zero quota
 
 ### 3. Automatic Background Reconciliation (Optional)
 For servers that need automatic reconciliation, enable the background job:
@@ -199,14 +201,22 @@ For servers that need automatic reconciliation, enable the background job:
     "ReconciliationInactiveMultiplier": 168.0,
     "ReconciliationMinIntervalHours": 2.0,
     "ReconciliationMaxIntervalDays": 7.0,
-    "WebSubReliabilityThresholdHours": 6.0
+    "WebSubReliabilityThresholdHours": 6.0,
+    "WebSubStaleThresholdDays": 30.0
   }
 }
 ```
 
+**Optimizing for dead channels:**
+If you have many inactive subscriptions (80%+ of channels post rarely/never):
+- Increase `WebSubStaleThresholdDays` to 90 or 180 days
+- Dead channels with working WebSub won't be reconciled for months
+- Dramatically reduces quota usage (from ~2,400 to ~500-800 units/day for 200 channels)
+
 **When background reconciliation runs:**
 - Evaluates all channels every hour (configurable)
 - Applies same adaptive logic as client-initiated reconciliation
+- Skips dead channels with working WebSub
 - Useful for servers with no active clients or for ensuring freshness
 
 **Quota Impact (with background reconciliation enabled):**

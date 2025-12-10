@@ -121,6 +121,13 @@ public class HubOptions
     public double WebSubReliabilityThresholdHours { get; set; } = 6.0;
     
     /// <summary>
+    /// Days since last WebSub notification for inactive channels before checking if WebSub is stale.
+    /// For channels that haven't posted in 30+ days, if WebSub hasn't fired in this many days,
+    /// reconcile to ensure the channel hasn't revived. Set higher (e.g., 90) to reduce quota on dead channels.
+    /// </summary>
+    public double WebSubStaleThresholdDays { get; set; } = 30.0;
+    
+    /// <summary>
     /// Number of recent videos to analyze for calculating average publish interval.
     /// </summary>
     public int ActivityAnalysisSampleSize { get; set; } = 10;
