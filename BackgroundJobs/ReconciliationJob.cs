@@ -157,6 +157,18 @@ public class ReconciliationJob : BackgroundService
             return false;
         }
         
+        // If the channel has been inactive for a long time (e.g., longer than the low activity threshold),
+        // don't rely solely on WebSub - we should reconcile to detect if the channel became active again
+        if (channel.AveragePublishInterval.HasValue)
+        {
+            var inactivityThreshold = TimeSpan.FromDays(options.LowActivityThresholdDays);
+            if (channel.AveragePublishInterval.Value > inactivityThreshold)
+            {
+                // For inactive channels, don't skip reconciliation even with recent WebSub
+                return false;
+            }
+        }
+        
         // If WebSub notification was recent, we can trust it's working
         var timeSinceLastWebSub = DateTimeOffset.UtcNow - channel.LastWebSubNotification.Value;
         var threshold = TimeSpan.FromHours(options.WebSubReliabilityThresholdHours);

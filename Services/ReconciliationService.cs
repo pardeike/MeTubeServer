@@ -231,10 +231,10 @@ public class ReconciliationService
             return;
         }
         
-        // Calculate average interval
-        var totalTicks = intervals.Sum(i => i.Ticks);
-        var averageTicks = totalTicks / intervals.Count;
-        channel.AveragePublishInterval = TimeSpan.FromTicks(averageTicks);
+        // Calculate average interval using double arithmetic to avoid overflow
+        var totalSeconds = intervals.Sum(i => i.TotalSeconds);
+        var averageSeconds = totalSeconds / intervals.Count;
+        channel.AveragePublishInterval = TimeSpan.FromSeconds(averageSeconds);
         
         _logger.LogDebug("Channel {ChannelId} average publish interval: {Interval}", 
             channel.ChannelId, channel.AveragePublishInterval);
