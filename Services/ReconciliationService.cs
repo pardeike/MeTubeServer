@@ -61,21 +61,23 @@ public class ReconciliationService
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var interval = CalculateReconcileInterval(channel, now);
-            if (!ShouldReconcileChannel(channel, now, interval, out var waitTime))
+            var baseInterval = CalculateReconcileInterval(channel, now);
+            var state = GetOrCreateState(channel, baseInterval);
+            if (!ShouldReconcileChannel(state, now, out var waitTime))
             {
                 skippedChannels++;
                 _logger.LogDebug(
                     "Skipping reconciliation for channel {ChannelId}; next eligible in {WaitTime:g} (interval {Interval:g})",
                     channel.ChannelId,
                     waitTime,
-                    interval);
+                    state.Interval);
                 continue;
             }
 
+            var newVideos = 0;
             try
             {
-                var newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
+                newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
                 totalNewVideos += newVideos;
             }
             catch (Exception ex)
@@ -85,7 +87,7 @@ public class ReconciliationService
             }
             finally
             {
-                UpdateReconcileState(channel, now, interval);
+                UpdateReconcileState(channel, state, now, baseInterval, newVideos > 0);
             }
         }
 
@@ -201,17 +203,24 @@ public class ReconciliationService
         return TimeSpan.FromDays(14); // Long-tail channels; reconcile sparingly
     }
 
-    private bool ShouldReconcileChannel(
-        Channel channel,
-        DateTimeOffset now,
-        TimeSpan interval,
-        out TimeSpan waitTime)
+    private ChannelReconcileState GetOrCreateState(Channel channel, TimeSpan baseInterval)
     {
         var state = _channelReconcileStates.AddOrUpdate(
             channel.Id,
-            _ => new ChannelReconcileState(DateTimeOffset.MinValue, interval),
-            (_, existing) => existing with { Interval = interval });
+            _ => new ChannelReconcileState(DateTimeOffset.MinValue, baseInterval, 0),
+            (_, existing) => existing with
+            {
+                Interval = existing.Interval > baseInterval ? existing.Interval : baseInterval
+            });
 
+        return state;
+    }
+
+    private static bool ShouldReconcileChannel(
+        ChannelReconcileState state,
+        DateTimeOffset now,
+        out TimeSpan waitTime)
+    {
         var nextCheck = state.LastCheckedAt == DateTimeOffset.MinValue
             ? DateTimeOffset.MinValue
             : state.LastCheckedAt + state.Interval;
@@ -226,10 +235,33 @@ public class ReconciliationService
         return true;
     }
 
-    private void UpdateReconcileState(Channel channel, DateTimeOffset checkedAt, TimeSpan interval)
+    private void UpdateReconcileState(
+        Channel channel,
+        ChannelReconcileState state,
+        DateTimeOffset checkedAt,
+        TimeSpan baseInterval,
+        bool foundNewVideos)
     {
-        _channelReconcileStates[channel.Id] = new ChannelReconcileState(checkedAt, interval);
+        var consecutiveMisses = foundNewVideos ? 0 : state.ConsecutiveNoNewVideos + 1;
+        var adaptiveInterval = foundNewVideos
+            ? baseInterval
+            : CalculateAdaptiveInterval(baseInterval, consecutiveMisses);
+
+        _channelReconcileStates[channel.Id] = state with
+        {
+            LastCheckedAt = checkedAt,
+            Interval = adaptiveInterval,
+            ConsecutiveNoNewVideos = consecutiveMisses
+        };
     }
 
-    private sealed record ChannelReconcileState(DateTimeOffset LastCheckedAt, TimeSpan Interval);
+    private static TimeSpan CalculateAdaptiveInterval(TimeSpan baseInterval, int consecutiveMisses)
+    {
+        var multiplier = 1 + Math.Min(consecutiveMisses, 6); // cap multiplier growth
+        var scaled = TimeSpan.FromTicks(baseInterval.Ticks * multiplier);
+        var maxInterval = TimeSpan.FromDays(30);
+        return scaled > maxInterval ? maxInterval : scaled;
+    }
+
+    private sealed record ChannelReconcileState(DateTimeOffset LastCheckedAt, TimeSpan Interval, int ConsecutiveNoNewVideos);
 }
