@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using MeTubeServer.Data;
 using MeTubeServer.Models;
@@ -13,6 +14,7 @@ public class ReconciliationService
     private readonly YouTubeApiService _youtubeApi;
     private readonly IBackgroundTaskQueue _taskQueue;
     private readonly ILogger<ReconciliationService> _logger;
+    private readonly ConcurrentDictionary<int, ChannelReconcileState> _channelReconcileStates = new();
 
     public ReconciliationService(
         YouTubeApiService youtubeApi,
@@ -50,13 +52,27 @@ public class ReconciliationService
             return 0;
         }
 
+        var now = DateTimeOffset.UtcNow;
         _logger.LogInformation("Reconciling {Count} channels for user {UserId}", channels.Count, userId);
 
         int totalNewVideos = 0;
+        var skippedChannels = 0;
         foreach (var channel in channels)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
+            var interval = CalculateReconcileInterval(channel, now);
+            if (!ShouldReconcileChannel(channel, now, interval, out var waitTime))
+            {
+                skippedChannels++;
+                _logger.LogDebug(
+                    "Skipping reconciliation for channel {ChannelId}; next eligible in {WaitTime:g} (interval {Interval:g})",
+                    channel.ChannelId,
+                    waitTime,
+                    interval);
+                continue;
+            }
+
             try
             {
                 var newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
@@ -64,14 +80,21 @@ public class ReconciliationService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error reconciling channel {ChannelId} for user {UserId}", 
+                _logger.LogError(ex, "Error reconciling channel {ChannelId} for user {UserId}",
                     channel.ChannelId, userId);
+            }
+            finally
+            {
+                UpdateReconcileState(channel, now, interval);
             }
         }
 
-        _logger.LogInformation("Reconciled {TotalNewVideos} new videos for user {UserId}", 
-            totalNewVideos, userId);
-        
+        _logger.LogInformation(
+            "Reconciled {TotalNewVideos} new videos for user {UserId}. Skipped {Skipped} channels due to cadence-aware throttling",
+            totalNewVideos,
+            userId,
+            skippedChannels);
+
         return totalNewVideos;
     }
 
@@ -156,4 +179,57 @@ public class ReconciliationService
 
         return newVideosCount;
     }
+
+    private static TimeSpan CalculateReconcileInterval(Channel channel, DateTimeOffset now)
+    {
+        if (channel.LastSeenPublishedAt is null)
+        {
+            return TimeSpan.FromHours(6); // New or uninitialized channels get a quick first pass
+        }
+
+        var age = now - channel.LastSeenPublishedAt.Value;
+
+        if (age <= TimeSpan.FromDays(7))
+            return TimeSpan.FromHours(12); // Active weekly uploaders
+
+        if (age <= TimeSpan.FromDays(30))
+            return TimeSpan.FromDays(1); // Typical cadence: daily or weekly
+
+        if (age <= TimeSpan.FromDays(90))
+            return TimeSpan.FromDays(3); // Monthly-ish channels
+
+        return TimeSpan.FromDays(14); // Long-tail channels; reconcile sparingly
+    }
+
+    private bool ShouldReconcileChannel(
+        Channel channel,
+        DateTimeOffset now,
+        TimeSpan interval,
+        out TimeSpan waitTime)
+    {
+        var state = _channelReconcileStates.AddOrUpdate(
+            channel.Id,
+            _ => new ChannelReconcileState(DateTimeOffset.MinValue, interval),
+            (_, existing) => existing with { Interval = interval });
+
+        var nextCheck = state.LastCheckedAt == DateTimeOffset.MinValue
+            ? DateTimeOffset.MinValue
+            : state.LastCheckedAt + state.Interval;
+
+        if (nextCheck != DateTimeOffset.MinValue && now < nextCheck)
+        {
+            waitTime = nextCheck - now;
+            return false;
+        }
+
+        waitTime = TimeSpan.Zero;
+        return true;
+    }
+
+    private void UpdateReconcileState(Channel channel, DateTimeOffset checkedAt, TimeSpan interval)
+    {
+        _channelReconcileStates[channel.Id] = new ChannelReconcileState(checkedAt, interval);
+    }
+
+    private sealed record ChannelReconcileState(DateTimeOffset LastCheckedAt, TimeSpan Interval);
 }
