@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 // Configure options
 builder.Services.Configure<YouTubeOptions>(builder.Configuration.GetSection("YouTube"));
 builder.Services.Configure<HubOptions>(builder.Configuration.GetSection("Hub"));
+builder.Services.Configure<ReconciliationSettings>(builder.Configuration.GetSection("Reconciliation"));
 
 // Configure shutdown timeout (#36)
 builder.Services.Configure<HostOptions>(options =>
