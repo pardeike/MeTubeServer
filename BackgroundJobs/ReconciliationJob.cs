@@ -87,10 +87,20 @@ public class ReconciliationJob : BackgroundService
 
         int reconciledCount = 0;
         int skippedCount = 0;
+        int webSubSkippedCount = 0;
 
         foreach (var channel in allChannels)
         {
             cancellationToken.ThrowIfCancellationRequested();
+
+            // Skip reconciliation if WebSub is working reliably for this channel
+            if (ShouldSkipDueToWebSub(channel))
+            {
+                webSubSkippedCount++;
+                _logger.LogDebug("Skipping channel {ChannelId} - WebSub working reliably (last notification: {LastNotification})", 
+                    channel.ChannelId, channel.LastWebSubNotification);
+                continue;
+            }
 
             // Determine if this channel needs reconciliation based on its activity
             var nextReconciliationTime = CalculateNextReconciliationTime(channel);
@@ -130,8 +140,28 @@ public class ReconciliationJob : BackgroundService
             }
         }
 
-        _logger.LogInformation("Reconciliation cycle complete: {Reconciled} channels reconciled, {Skipped} skipped", 
-            reconciledCount, skippedCount);
+        _logger.LogInformation("Reconciliation cycle complete: {Reconciled} channels reconciled, {Skipped} skipped by schedule, {WebSubSkipped} skipped due to WebSub", 
+            reconciledCount, skippedCount, webSubSkippedCount);
+    }
+    
+    /// <summary>
+    /// Determines if a channel should skip reconciliation because WebSub is working reliably.
+    /// </summary>
+    private bool ShouldSkipDueToWebSub(Channel channel)
+    {
+        var options = _options.Value;
+        
+        // If we haven't received a WebSub notification, don't skip
+        if (channel.LastWebSubNotification == null)
+        {
+            return false;
+        }
+        
+        // If WebSub notification was recent, we can trust it's working
+        var timeSinceLastWebSub = DateTimeOffset.UtcNow - channel.LastWebSubNotification.Value;
+        var threshold = TimeSpan.FromHours(options.WebSubReliabilityThresholdHours);
+        
+        return timeSinceLastWebSub < threshold;
     }
 
     /// <summary>

@@ -18,6 +18,7 @@ public class Channel
     // Reconciliation tracking for adaptive refresh
     public DateTimeOffset? LastReconciledAt { get; set; }
     public TimeSpan? AveragePublishInterval { get; set; }
+    public DateTimeOffset? LastWebSubNotification { get; set; }
     
     public ICollection<UserChannel> UserChannels { get; set; } = new List<UserChannel>();
     public ICollection<Video> Videos { get; set; } = new List<Video>();

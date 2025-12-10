@@ -106,4 +106,10 @@ public class HubOptions
     /// Maximum reconciliation interval in days.
     /// </summary>
     public double ReconciliationMaxIntervalDays { get; set; } = 7.0;
+    
+    /// <summary>
+    /// Hours since last WebSub notification before considering WebSub unreliable.
+    /// Channels with recent WebSub notifications can skip reconciliation.
+    /// </summary>
+    public double WebSubReliabilityThresholdHours { get; set; } = 6.0;
 }

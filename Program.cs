@@ -457,6 +457,9 @@ app.MapPost("/websub/youtube", async (
         {
             channel.LastSeenPublishedAt = entry.PublishedAt;
         }
+        
+        // Track WebSub notification receipt for adaptive reconciliation
+        channel.LastWebSubNotification = DateTimeOffset.UtcNow;
 
         logger.LogInformation("Added new video {VideoId} for channel {ChannelId}", entry.VideoId, entry.ChannelId);
         
