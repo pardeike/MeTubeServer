@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MeTubeServer.Data;
 using MeTubeServer.Models;
 
@@ -13,15 +14,18 @@ public class ReconciliationService
     private readonly YouTubeApiService _youtubeApi;
     private readonly IBackgroundTaskQueue _taskQueue;
     private readonly ILogger<ReconciliationService> _logger;
+    private readonly IOptions<HubOptions> _options;
 
     public ReconciliationService(
         YouTubeApiService youtubeApi,
         IBackgroundTaskQueue taskQueue,
-        ILogger<ReconciliationService> logger)
+        ILogger<ReconciliationService> logger,
+        IOptions<HubOptions> options)
     {
         _youtubeApi = youtubeApi;
         _taskQueue = taskQueue;
         _logger = logger;
+        _options = options;
     }
 
     /// <summary>
@@ -190,19 +194,23 @@ public class ReconciliationService
         MeTubeDbContext db,
         CancellationToken cancellationToken)
     {
-        // Get the last 10 videos to calculate average interval
+        var options = _options.Value;
+        var sampleSize = options.ActivityAnalysisSampleSize;
+        var defaultInterval = TimeSpan.FromDays(options.DefaultInactiveIntervalDays);
+        
+        // Get recent videos to calculate average interval
         var recentVideos = await db.Videos
             .Where(v => v.ChannelId == channel.Id)
             .OrderByDescending(v => v.PublishedAt)
-            .Take(10)
+            .Take(sampleSize)
             .Select(v => v.PublishedAt)
             .ToListAsync(cancellationToken);
         
         if (recentVideos.Count < 2)
         {
             // Not enough data to calculate interval
-            // Default to a long interval (30 days) for inactive channels
-            channel.AveragePublishInterval = TimeSpan.FromDays(30);
+            // Use default interval for inactive channels
+            channel.AveragePublishInterval = defaultInterval;
             return;
         }
         
@@ -219,7 +227,7 @@ public class ReconciliationService
         
         if (intervals.Count == 0)
         {
-            channel.AveragePublishInterval = TimeSpan.FromDays(30);
+            channel.AveragePublishInterval = defaultInterval;
             return;
         }
         

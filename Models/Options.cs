@@ -93,7 +93,7 @@ public class HubOptions
     public double ReconciliationLowActivityMultiplier { get; set; } = 48.0;
     
     /// <summary>
-    /// Multiplier for inactive channels (no videos in 90+ days).
+    /// Multiplier for inactive channels (no videos in 30+ days).
     /// </summary>
     public double ReconciliationInactiveMultiplier { get; set; } = 168.0;
     
@@ -112,4 +112,29 @@ public class HubOptions
     /// Channels with recent WebSub notifications can skip reconciliation.
     /// </summary>
     public double WebSubReliabilityThresholdHours { get; set; } = 6.0;
+    
+    /// <summary>
+    /// Number of recent videos to analyze for calculating average publish interval.
+    /// </summary>
+    public int ActivityAnalysisSampleSize { get; set; } = 10;
+    
+    /// <summary>
+    /// Activity threshold in days for high-activity channels (daily or more frequent).
+    /// </summary>
+    public double HighActivityThresholdDays { get; set; } = 1.0;
+    
+    /// <summary>
+    /// Activity threshold in days for medium-activity channels (weekly).
+    /// </summary>
+    public double MediumActivityThresholdDays { get; set; } = 7.0;
+    
+    /// <summary>
+    /// Activity threshold in days for low-activity channels (monthly).
+    /// </summary>
+    public double LowActivityThresholdDays { get; set; } = 30.0;
+    
+    /// <summary>
+    /// Default interval in days for channels with insufficient data.
+    /// </summary>
+    public double DefaultInactiveIntervalDays { get; set; } = 30.0;
 }

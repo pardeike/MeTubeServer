@@ -201,18 +201,18 @@ public class ReconciliationJob : BackgroundService
         var avgInterval = channel.AveragePublishInterval.Value;
         var multiplier = 1.0;
 
-        // Determine activity level and apply corresponding multiplier
-        if (avgInterval <= TimeSpan.FromDays(1))
+        // Determine activity level and apply corresponding multiplier using configurable thresholds
+        if (avgInterval <= TimeSpan.FromDays(options.HighActivityThresholdDays))
         {
             // High activity: publishes daily or more
             multiplier = options.ReconciliationHighActivityMultiplier;
         }
-        else if (avgInterval <= TimeSpan.FromDays(7))
+        else if (avgInterval <= TimeSpan.FromDays(options.MediumActivityThresholdDays))
         {
             // Medium activity: publishes weekly
             multiplier = options.ReconciliationMediumActivityMultiplier;
         }
-        else if (avgInterval <= TimeSpan.FromDays(30))
+        else if (avgInterval <= TimeSpan.FromDays(options.LowActivityThresholdDays))
         {
             // Low activity: publishes monthly
             multiplier = options.ReconciliationLowActivityMultiplier;

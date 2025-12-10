@@ -197,11 +197,11 @@ The reconciliation job now automatically adjusts frequency based on channel acti
 
 **Quota Impact:**
 - Old approach: ~9,600 units/day for 200 channels (48x/day × 200)
-- New approach: ~2,000-4,000 units/day for 200 channels (50-60% reduction)
+- New approach: ~2,000-2,500 units/day for 200 channels (70-75% reduction)
   - 50% of channels skip via WebSub = 0 units
-  - 10% high-activity = 1,200 units (12x × 10 channels × 10)
-  - 20% medium-activity = 800 units (2x × 10 channels × 40)
-  - 20% low-activity = 200 units (0.5x × 10 channels × 40)
+  - 10% high-activity = 240 units (12x/day × 20 channels)
+  - 20% medium-activity = 800 units (2x/day × 40 channels)
+  - 20% low-activity = 200 units (0.5x/day × 40 channels)
 
 ### 3. Manual Tuning (Advanced)
 For fine-tuned control, adjust the multipliers:
