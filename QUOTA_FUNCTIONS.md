@@ -98,6 +98,18 @@ YouTube API: playlistItems.list - 1 unit per channel
 - **Quota**: 1 unit × number of user's channels
 - **Frequency**: User-controlled (typically 1-10 times per day per user)
 
+#### Cadence-aware throttling (new)
+- **What**: Reconciliation now respects a per-channel interval derived from its upload cadence and automatically backs off when repeated checks find no new videos.
+- **Why**: Cuts unnecessary playlistItems calls (goal: >50% reduction) while still picking up occasional uploads.
+- **How it works**:
+  - Base interval = time since last upload (e.g., 12h for active weeklies, 1d for typical channels, 14d+ for long-tail).
+  - Each time a reconciliation finds no new videos, the next interval scales up (base × 2, 3, … up to 7×, capped at 30 days). A new video resets to the base interval.
+  - Skipped channels are logged with the wait time until they become eligible again.
+
+**Examples**
+- Weekly uploader (last seen 3 days ago): base interval = 12h. After two empty runs, next intervals become ~24h then ~36h. A new upload resets back to 12h.
+- Monthly uploader (last seen 40 days ago): base interval = 1d. With no new uploads, checks stretch to 2d → 3d → 4d until the cap. Any new video resets to 1d.
+
 ### Daily Impact Examples
 Assuming users refresh 5 times per day on average:
 - 10 channels, 10 users: 500 units/day (5%)
