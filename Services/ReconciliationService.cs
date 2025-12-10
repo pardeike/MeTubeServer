@@ -15,7 +15,7 @@ public class ReconciliationService
     private readonly YouTubeApiService _youtubeApi;
     private readonly IBackgroundTaskQueue _taskQueue;
     private readonly ILogger<ReconciliationService> _logger;
-    private readonly TimeSpan _maxDetectionLag;
+    private readonly ReconciliationSettings _settings;
     private readonly ConcurrentDictionary<int, ChannelReconcileState> _channelReconcileStates = new();
 
     public ReconciliationService(
@@ -27,8 +27,7 @@ public class ReconciliationService
         _youtubeApi = youtubeApi;
         _taskQueue = taskQueue;
         _logger = logger;
-        var reconciliationSettings = settings?.Value ?? new ReconciliationSettings();
-        _maxDetectionLag = reconciliationSettings.MaxDetectionLag;
+        _settings = settings?.Value ?? new ReconciliationSettings();
     }
 
     /// <summary>
@@ -43,7 +42,6 @@ public class ReconciliationService
         MeTubeDbContext db,
         CancellationToken cancellationToken = default)
     {
-        // Get all channels for this user
         var channels = await db.UserChannels
             .Where(uc => uc.UserId == userId)
             .Include(uc => uc.Channel)
@@ -60,8 +58,12 @@ public class ReconciliationService
         var now = DateTimeOffset.UtcNow;
         _logger.LogInformation("Reconciling {Count} channels for user {UserId}", channels.Count, userId);
 
-        int totalNewVideos = 0;
-        var skippedChannels = 0;
+        var bucketCounts = Enum.GetValues<ActivityBucket>().ToDictionary(b => b, _ => 0);
+        var skippedByWebSub = 0;
+        var skippedByCadence = 0;
+        var reconciledChannels = 0;
+        var totalNewVideos = 0;
+
         foreach (var channel in channels)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -69,14 +71,31 @@ public class ReconciliationService
             var state = _channelReconcileStates.TryGetValue(channel.Id, out var existingState)
                 ? existingState
                 : null;
+
             var cadence = await CalculateChannelCadenceAsync(channel, db, now, state, cancellationToken);
-            state = GetOrCreateState(channel, cadence, state);
-            if (!ShouldReconcileChannel(state, now, out var waitTime))
+            var bucket = DetermineActivityBucket(cadence.LastUploadAt, now);
+            bucketCounts[bucket] += 1;
+
+            var baseInterval = ComputeBaseInterval(cadence.CadenceEma, bucket);
+            state = GetOrCreateState(channel, baseInterval, cadence, state);
+
+            if (!ShouldReconcileChannel(channel, state, cadence, now, out var waitTime, out var reason))
             {
-                skippedChannels++;
+                if (reason == ReconcileDecisionReason.WebSubReliable)
+                {
+                    skippedByWebSub++;
+                }
+                else
+                {
+                    skippedByCadence++;
+                }
+
                 _logger.LogDebug(
-                    "Skipping reconciliation for channel {ChannelId}; next eligible in {WaitTime:g} (interval {Interval:g})",
+                    "Skipping reconciliation for channel {ChannelId} ({ChannelName}); bucket {Bucket}, reason {Reason}, next eligible in {WaitTime:g} (interval {Interval:g})",
                     channel.ChannelId,
+                    channel.ChannelName,
+                    bucket,
+                    reason,
                     waitTime,
                     state.Interval);
                 continue;
@@ -87,23 +106,29 @@ public class ReconciliationService
             {
                 newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
                 totalNewVideos += newVideos;
+                reconciledChannels++;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error reconciling channel {ChannelId} for user {UserId}",
-                    channel.ChannelId, userId);
+                _logger.LogError(ex, "Error reconciling channel {ChannelId} for user {UserId}", channel.ChannelId, userId);
             }
             finally
             {
-                UpdateReconcileState(channel, state, now, cadence, newVideos > 0);
+                UpdateReconcileState(channel, state, now, cadence, bucket, baseInterval, newVideos > 0);
             }
         }
 
         _logger.LogInformation(
-            "Reconciled {TotalNewVideos} new videos for user {UserId}. Skipped {Skipped} channels due to cadence-aware throttling",
+            "Reconciled {TotalNewVideos} new videos for user {UserId}. Reconciled {RanCount} channels. Skipped {CadenceSkips} cadence-gated and {WebSubSkips} WebSub-reliable channels. Buckets: hot={Hot}, warm={Warm}, cold={Cold}, frozen={Frozen}",
             totalNewVideos,
             userId,
-            skippedChannels);
+            reconciledChannels,
+            skippedByCadence,
+            skippedByWebSub,
+            bucketCounts[ActivityBucket.Hot],
+            bucketCounts[ActivityBucket.Warm],
+            bucketCounts[ActivityBucket.Cold],
+            bucketCounts[ActivityBucket.Frozen]);
 
         return totalNewVideos;
     }
@@ -119,7 +144,6 @@ public class ReconciliationService
         if (string.IsNullOrEmpty(channel.UploadsPlaylistId))
             return 0;
 
-        // Add 1 hour overlap to account for clock skew and missing videos
         var since = channel.LastSeenPublishedAt?.AddHours(-1);
 
         var items = await _youtubeApi.GetPlaylistItemsAsync(
@@ -133,24 +157,22 @@ public class ReconciliationService
 
         _logger.LogDebug("Found {Count} items for channel {ChannelId}", items.Count, channel.ChannelId);
 
-        int newVideosCount = 0;
+        var newVideosCount = 0;
         foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
             var videoId = item.ContentDetails?.VideoId ?? item.Snippet?.ResourceId?.VideoId;
             if (string.IsNullOrEmpty(videoId))
                 continue;
 
             var publishedAt = item.Snippet?.PublishedAt ?? DateTimeOffset.UtcNow;
 
-            // Check if we already have this video
             var existingVideo = await db.Videos
                 .FirstOrDefaultAsync(v => v.VideoId == videoId, cancellationToken);
 
             if (existingVideo == null)
             {
-                // New video - add it
                 var video = new Video
                 {
                     VideoId = videoId,
@@ -164,15 +186,13 @@ public class ReconciliationService
                 db.Videos.Add(video);
                 newVideosCount++;
 
-                // Update channel's last seen timestamp
                 if (publishedAt > (channel.LastSeenPublishedAt ?? DateTimeOffset.MinValue))
                 {
                     channel.LastSeenPublishedAt = publishedAt;
                 }
 
                 _logger.LogInformation("Added video {VideoId} for channel {ChannelId}", videoId, channel.ChannelId);
-                
-                // Queue video enrichment to fetch duration and other metadata
+
                 await _taskQueue.QueueBackgroundWorkItemAsync(async (sp, ct) =>
                 {
                     var enrichmentService = sp.GetRequiredService<VideoEnrichmentService>();
@@ -197,28 +217,6 @@ public class ReconciliationService
         ChannelReconcileState? state,
         CancellationToken cancellationToken)
     {
-        var medianGap = await CalculateMedianGapAsync(channel, db, cancellationToken);
-        var cadenceSeed = medianGap
-            ?? (channel.LastSeenPublishedAt.HasValue ? now - channel.LastSeenPublishedAt.Value : TimeSpan.FromDays(1));
-
-        var previousEma = state?.CadenceEma ?? cadenceSeed;
-        var emaTicks = state == null
-            ? cadenceSeed.Ticks
-            : (long)(previousEma.Ticks * 0.7 + cadenceSeed.Ticks * 0.3);
-        var ema = TimeSpan.FromTicks(emaTicks);
-
-        var cadenceMultiplier = 1.0; // Allows tuning if future configs need more slack
-        var baseInterval = TimeSpan.FromTicks((long)(ema.Ticks * cadenceMultiplier));
-        baseInterval = Clamp(baseInterval, TimeSpan.FromHours(12), TimeSpan.FromDays(14));
-
-        return new ChannelCadence(baseInterval, ema, medianGap);
-    }
-
-    private static async Task<TimeSpan?> CalculateMedianGapAsync(
-        Channel channel,
-        MeTubeDbContext db,
-        CancellationToken cancellationToken)
-    {
         var publishTimes = await db.Videos
             .Where(v => v.ChannelId == channel.Id)
             .OrderByDescending(v => v.PublishedAt)
@@ -226,6 +224,22 @@ public class ReconciliationService
             .Take(10)
             .ToListAsync(cancellationToken);
 
+        var medianGap = CalculateMedianGap(publishTimes);
+        var lastUploadAt = publishTimes.FirstOrDefault();
+        var cadenceSeed = medianGap
+            ?? (lastUploadAt != default ? now - lastUploadAt : TimeSpan.FromDays(1));
+
+        var previousEma = state?.CadenceEma ?? cadenceSeed;
+        var emaTicks = state == null
+            ? cadenceSeed.Ticks
+            : (long)(previousEma.Ticks * 0.7 + cadenceSeed.Ticks * 0.3);
+        var ema = TimeSpan.FromTicks(emaTicks);
+
+        return new ChannelCadence(ema, medianGap, lastUploadAt == default ? null : lastUploadAt);
+    }
+
+    internal static TimeSpan? CalculateMedianGap(List<DateTimeOffset> publishTimes)
+    {
         if (publishTimes.Count < 2)
         {
             return null;
@@ -254,36 +268,48 @@ public class ReconciliationService
         return value > max ? max : value;
     }
 
-    private ChannelReconcileState GetOrCreateState(
+    internal ChannelReconcileState GetOrCreateState(
         Channel channel,
+        TimeSpan baseInterval,
         ChannelCadence cadence,
         ChannelReconcileState? existingState)
     {
         var state = _channelReconcileStates.AddOrUpdate(
             channel.Id,
-            _ => new ChannelReconcileState(DateTimeOffset.MinValue, cadence.BaseInterval, 0, cadence.CadenceEma),
+            _ => new ChannelReconcileState(DateTimeOffset.MinValue, baseInterval, 0, cadence.CadenceEma),
             (_, existing) => existing with
             {
-                Interval = existing.Interval > cadence.BaseInterval ? existing.Interval : cadence.BaseInterval,
+                Interval = existing.Interval > baseInterval ? existing.Interval : baseInterval,
                 CadenceEma = cadence.CadenceEma
             });
 
         return state;
     }
 
-    private bool ShouldReconcileChannel(
+    internal bool ShouldReconcileChannel(
+        Channel channel,
         ChannelReconcileState state,
+        ChannelCadence cadence,
         DateTimeOffset now,
-        out TimeSpan waitTime)
+        out TimeSpan waitTime,
+        out ReconcileDecisionReason reason)
     {
+        if (IsWebSubReliable(channel, cadence.LastUploadAt, now))
+        {
+            waitTime = TimeSpan.Zero;
+            reason = ReconcileDecisionReason.WebSubReliable;
+            return false;
+        }
+
         if (state.LastCheckedAt == DateTimeOffset.MinValue)
         {
             waitTime = TimeSpan.Zero;
+            reason = ReconcileDecisionReason.FirstRun;
             return true;
         }
 
         var nextCheck = state.LastCheckedAt + state.Interval;
-        var latestAllowed = state.LastCheckedAt + _maxDetectionLag;
+        var latestAllowed = state.LastCheckedAt + _settings.MaxDetectionLag;
         if (nextCheck > latestAllowed)
         {
             nextCheck = latestAllowed;
@@ -292,10 +318,12 @@ public class ReconciliationService
         if (now < nextCheck)
         {
             waitTime = nextCheck - now;
+            reason = ReconcileDecisionReason.NotYetDue;
             return false;
         }
 
         waitTime = TimeSpan.Zero;
+        reason = ReconcileDecisionReason.DueByCadence;
         return true;
     }
 
@@ -304,12 +332,14 @@ public class ReconciliationService
         ChannelReconcileState state,
         DateTimeOffset checkedAt,
         ChannelCadence cadence,
+        ActivityBucket bucket,
+        TimeSpan baseInterval,
         bool foundNewVideos)
     {
         var consecutiveMisses = foundNewVideos
             ? ReduceEmptyStreak(state.ConsecutiveNoNewVideos, state.Interval)
             : state.ConsecutiveNoNewVideos + 1;
-        var adaptiveInterval = CalculateAdaptiveInterval(cadence.BaseInterval, consecutiveMisses);
+        var adaptiveInterval = CalculateAdaptiveInterval(baseInterval, bucket, consecutiveMisses);
 
         _channelReconcileStates[channel.Id] = state with
         {
@@ -320,15 +350,25 @@ public class ReconciliationService
         };
     }
 
-    private static TimeSpan CalculateAdaptiveInterval(TimeSpan baseInterval, int consecutiveMisses)
+    internal TimeSpan ComputeBaseInterval(TimeSpan cadenceEma, ActivityBucket bucket)
     {
-        var multiplier = 1 + Math.Min(consecutiveMisses, 6); // cap multiplier growth
-        var scaled = TimeSpan.FromTicks(baseInterval.Ticks * multiplier);
-        var maxInterval = TimeSpan.FromDays(30);
-        return scaled > maxInterval ? maxInterval : scaled;
+        var adjustedCadence = TimeSpan.FromTicks((long)(cadenceEma.Ticks * _settings.CadenceMultiplier));
+        var intervals = GetBucketIntervals(bucket);
+        return Clamp(adjustedCadence, intervals.Min, intervals.Max);
     }
 
-    private static int ReduceEmptyStreak(int currentStreak, TimeSpan previousInterval)
+    internal TimeSpan CalculateAdaptiveInterval(TimeSpan baseInterval, ActivityBucket bucket, int consecutiveMisses)
+    {
+        var cappedMisses = Math.Min(consecutiveMisses, 4);
+        var multiplier = 1 + cappedMisses * 0.5;
+        var scaledTicks = (long)(baseInterval.Ticks * multiplier);
+        var intervals = GetBucketIntervals(bucket);
+        var scaled = TimeSpan.FromTicks(scaledTicks);
+        var clamped = Clamp(scaled, baseInterval, intervals.BackoffMax);
+        return clamped;
+    }
+
+    internal static int ReduceEmptyStreak(int currentStreak, TimeSpan previousInterval)
     {
         if (currentStreak <= 0)
         {
@@ -340,11 +380,82 @@ public class ReconciliationService
             : Math.Max(currentStreak - 1, 0);
     }
 
-    private sealed record ChannelCadence(TimeSpan BaseInterval, TimeSpan CadenceEma, TimeSpan? MedianGap);
+    internal ActivityBucket DetermineActivityBucket(DateTimeOffset? lastUploadAt, DateTimeOffset now)
+    {
+        if (lastUploadAt == null)
+        {
+            return ActivityBucket.Frozen;
+        }
 
-    private sealed record ChannelReconcileState(
+        var age = now - lastUploadAt.Value;
+        if (age <= _settings.HotThreshold)
+        {
+            return ActivityBucket.Hot;
+        }
+
+        if (age <= _settings.WarmThreshold)
+        {
+            return ActivityBucket.Warm;
+        }
+
+        if (age <= _settings.ColdThreshold)
+        {
+            return ActivityBucket.Cold;
+        }
+
+        return ActivityBucket.Frozen;
+    }
+
+    internal bool IsWebSubReliable(Channel channel, DateTimeOffset? lastUploadAt, DateTimeOffset now)
+    {
+        if (channel.LastWebSubNotification is null)
+        {
+            return false;
+        }
+
+        var lastNotification = channel.LastWebSubNotification.Value;
+        if (now - lastNotification > _settings.WebSubReliabilityWindow)
+        {
+            return false;
+        }
+
+        if (lastUploadAt is { } uploadAt && now - uploadAt > _settings.WebSubColdChannelThreshold)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private ActivityBucketIntervals GetBucketIntervals(ActivityBucket bucket) => bucket switch
+    {
+        ActivityBucket.Hot => _settings.Hot,
+        ActivityBucket.Warm => _settings.Warm,
+        ActivityBucket.Cold => _settings.Cold,
+        _ => _settings.Frozen
+    };
+
+    internal sealed record ChannelCadence(TimeSpan CadenceEma, TimeSpan? MedianGap, DateTimeOffset? LastUploadAt);
+
+    internal sealed record ChannelReconcileState(
         DateTimeOffset LastCheckedAt,
         TimeSpan Interval,
         int ConsecutiveNoNewVideos,
         TimeSpan CadenceEma);
+}
+
+public enum ActivityBucket
+{
+    Hot,
+    Warm,
+    Cold,
+    Frozen
+}
+
+public enum ReconcileDecisionReason
+{
+    FirstRun,
+    NotYetDue,
+    DueByCadence,
+    WebSubReliable
 }

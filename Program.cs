@@ -68,7 +68,7 @@ builder.Services.AddHttpClient<WebSubService>()
 // Add custom services
 builder.Services.AddScoped<AtomFeedParser>();
 builder.Services.AddScoped<VideoEnrichmentService>();
-builder.Services.AddScoped<ReconciliationService>();
+builder.Services.AddSingleton<ReconciliationService>();
 builder.Services.AddSingleton<YouTubeQuotaTracker>();
 builder.Services.AddSingleton<YouTubeApiStatusService>();
 builder.Services.AddSingleton<BackgroundJobHealthCheck>();
@@ -152,8 +152,8 @@ using (var scope = app.Services.CreateScope())
     // Create/migrate database (#38)
     try
     {
-        await db.Database.EnsureCreatedAsync();
-        logger.LogInformation("Database initialized successfully");
+        await db.Database.MigrateAsync();
+        logger.LogInformation("Database migrated successfully");
     }
     catch (Exception ex)
     {
@@ -423,6 +423,8 @@ app.MapPost("/websub/youtube", async (
             logger.LogWarning("Channel {ChannelId} not found in database", entry.ChannelId);
             continue;
         }
+
+        channel.LastWebSubNotification = DateTimeOffset.UtcNow;
 
         // Check if video already exists
         var existingVideo = await db.Videos

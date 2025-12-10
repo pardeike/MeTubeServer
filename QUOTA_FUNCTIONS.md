@@ -98,17 +98,20 @@ YouTube API: playlistItems.list - 1 unit per channel
 - **Quota**: 1 unit × number of user's channels
 - **Frequency**: User-controlled (typically 1-10 times per day per user)
 
-#### Cadence-aware throttling (updated)
-- **What**: Reconciliation now respects a per-channel interval derived from historical upload cadence (EMA of recent median gaps) and automatically backs off when repeated checks find no new videos.
-- **Why**: Cuts unnecessary playlistItems calls (goal: >50% reduction) while still picking up occasional uploads and bounding detection lag.
+#### Cadence-aware throttling (bucketed + WebSub aware)
+- **What**: Reconciliation now uses upload recency to classify channels as Hot/Warm/Cold/Frozen, derives a base interval from an EMA of median publish gaps, and gates polling if WebSub notifications are clearly recent.
+- **Why**: Exploits the 85% long-tail population to skip most playlist polls while bounding detection lag for active channels when WebSub is quiet.
 - **How it works**:
-  - Base interval = `clamp(EMA(median_gap) × c, 12h, 14d)`, with `c` currently 1.0. The EMA seeds from the most recent gaps across up to 10 videos and smooths with the previous run.
-  - Each time a reconciliation finds no new videos, the next interval scales up (base × 2, 3, … up to 7×, capped at 30 days). New uploads shrink the empty-streak multiplier instead of hard-resetting it (decrement for normal channels, halve for long-tail backoffs).
-  - A max detection lag is enforced: `next_check_at` is never later than `last_reconcile_at + MaxDetectionLag` (configurable, defaults to 7d). Skipped channels are logged with the wait time until they become eligible again.
+  - Activity buckets: Hot (last upload ≤7d), Warm (≤30d), Cold (≤180d), Frozen (>180d or no uploads). Each bucket has its own interval clamp (Hot 6–24h, Warm 1–3d, Cold 7–14d, Frozen 30–60d).
+  - Base interval = `clamp(EMA(median_gap) × c, bucket_min, bucket_max)`, with smoothing seeded from the latest gaps across up to 10 videos. A configurable `MaxDetectionLag` (default 7d) caps the next eligible time regardless of backoff.
+  - Backoff scales by +50% per empty streak (capped) and is clamped per bucket (Hot/Warm ≤7d, Cold/Frozen ≤60d). New uploads soften the streak instead of hard-resetting it (decrement normally; halve when the interval was already long).
+  - WebSub-aware skip: if the channel received a WebSub notification within the reliability window (default 7d) and the last upload is not ancient (≤30d), reconciliation is skipped entirely; polling resumes automatically once notifications go quiet.
+  - Logging summarizes how many channels ran vs. skipped (WebSub vs. cadence) and bucket counts so refresh runs should normally touch only 10–20 of ~220 channels.
 
-**Examples**
-- Weekly uploader with consistent gaps around 4d: EMA(median_gap) ≈ 4d → base interval clamps to 12h (floor). After two empty runs, next intervals become ~24h then ~36h; a new upload trims the streak but keeps some backoff for stability.
-- Monthly uploader (gaps ~33d): base interval clamps near 14d. Empty runs stretch checks to ~28d then 42d (capped by MaxDetectionLag enforcement if configured tighter). A comeback upload halves the empty streak so long-tail channels keep some cushion while recovering quickly.
+- **Examples**
+- Hot channel (upload last 48h, EMA gap 3d): base interval clamps to 6–24h bucket → runs about daily unless WebSub is fresh; two empty runs stretch to ~18h then ~24h but detection lag cap keeps it ≤7d.
+- Cold channel (last upload 90d, EMA gap 40d): bucket clamp lands at ~14d; a few empty runs drift toward 60d max, yielding only a handful of playlist polls per year.
+- Frozen/never-uploaded channel: starts with a single reconcile (first-run override), then quickly settles at 30–60d unless WebSub goes silent after a comeback.
 
 ### Daily Impact Examples
 Assuming users refresh 5 times per day on average:

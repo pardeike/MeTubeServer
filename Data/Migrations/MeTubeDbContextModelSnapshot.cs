@@ -1,0 +1,194 @@
+using System;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using MeTubeServer.Data;
+
+#nullable disable
+
+namespace MeTubeServer.Data.Migrations;
+
+[DbContext(typeof(MeTubeDbContext))]
+public partial class MeTubeDbContextModelSnapshot : ModelSnapshot
+{
+    protected override void BuildModel(ModelBuilder modelBuilder)
+    {
+#pragma warning disable 612, 618
+        modelBuilder.HasAnnotation("ProductVersion", "9.0.0");
+
+        modelBuilder.Entity("MeTubeServer.Models.Channel", b =>
+        {
+            b.Property<int>("Id")
+                .ValueGeneratedOnAdd()
+                .HasColumnType("INTEGER")
+                .HasAnnotation("Sqlite:Autoincrement", true);
+
+            b.Property<string>("ChannelId")
+                .IsRequired()
+                .HasColumnType("TEXT");
+
+            b.Property<string>("ChannelName")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("ChannelThumbnailUrl")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("HubSecret")
+                .HasColumnType("TEXT");
+
+            b.Property<DateTimeOffset?>("LastSeenPublishedAt")
+                .HasColumnType("TEXT");
+
+            b.Property<DateTimeOffset?>("LastWebSubNotification")
+                .HasColumnType("TEXT");
+
+            b.Property<DateTimeOffset?>("LeaseExpiresAt")
+                .HasColumnType("TEXT");
+
+            b.Property<DateTimeOffset?>("MetadataLastUpdated")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("TopicUrl")
+                .IsRequired()
+                .HasColumnType("TEXT");
+
+            b.Property<string>("UploadsPlaylistId")
+                .HasColumnType("TEXT");
+
+            b.HasKey("Id");
+
+            b.HasIndex("ChannelId")
+                .IsUnique();
+
+            b.HasIndex("LeaseExpiresAt")
+                .HasDatabaseName("IX_Channels_LeaseExpiresAt");
+
+            b.HasIndex("TopicUrl")
+                .IsUnique();
+
+            b.ToTable("Channels");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.User", b =>
+        {
+            b.Property<int>("Id")
+                .ValueGeneratedOnAdd()
+                .HasColumnType("INTEGER")
+                .HasAnnotation("Sqlite:Autoincrement", true);
+
+            b.Property<string>("AppUserId")
+                .IsRequired()
+                .HasColumnType("TEXT");
+
+            b.HasKey("Id");
+
+            b.HasIndex("AppUserId")
+                .IsUnique();
+
+            b.ToTable("Users");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.UserChannel", b =>
+        {
+            b.Property<int>("UserId")
+                .HasColumnType("INTEGER");
+
+            b.Property<int>("ChannelId")
+                .HasColumnType("INTEGER");
+
+            b.Property<DateTimeOffset?>("UserLastSeenPublishedAt")
+                .HasColumnType("TEXT");
+
+            b.HasKey("UserId", "ChannelId");
+
+            b.HasIndex("ChannelId");
+
+            b.HasIndex("UserId", "ChannelId")
+                .HasDatabaseName("IX_UserChannels_User_Channel");
+
+            b.ToTable("UserChannels");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.Video", b =>
+        {
+            b.Property<int>("Id")
+                .ValueGeneratedOnAdd()
+                .HasColumnType("INTEGER")
+                .HasAnnotation("Sqlite:Autoincrement", true);
+
+            b.Property<int>("ChannelId")
+                .HasColumnType("INTEGER");
+
+            b.Property<string>("Description")
+                .HasColumnType("TEXT");
+
+            b.Property<TimeSpan?>("Duration")
+                .HasColumnType("TEXT");
+
+            b.Property<DateTimeOffset>("PublishedAt")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("ThumbnailUrl")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("Title")
+                .HasColumnType("TEXT");
+
+            b.Property<string>("VideoId")
+                .IsRequired()
+                .HasColumnType("TEXT");
+
+            b.HasKey("Id");
+
+            b.HasIndex("ChannelId", "PublishedAt")
+                .HasDatabaseName("IX_Videos_Channel_Published");
+
+            b.HasIndex("VideoId")
+                .IsUnique();
+
+            b.ToTable("Videos");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.UserChannel", b =>
+        {
+            b.HasOne("MeTubeServer.Models.Channel", "Channel")
+                .WithMany("UserChannels")
+                .HasForeignKey("ChannelId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+
+            b.HasOne("MeTubeServer.Models.User", "User")
+                .WithMany("UserChannels")
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+
+            b.Navigation("Channel");
+
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.Video", b =>
+        {
+            b.HasOne("MeTubeServer.Models.Channel", "Channel")
+                .WithMany("Videos")
+                .HasForeignKey("ChannelId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+
+            b.Navigation("Channel");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.Channel", b =>
+        {
+            b.Navigation("UserChannels");
+
+            b.Navigation("Videos");
+        });
+
+        modelBuilder.Entity("MeTubeServer.Models.User", b =>
+        {
+            b.Navigation("UserChannels");
+        });
+#pragma warning restore 612, 618
+    }
+}

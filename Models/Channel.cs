@@ -9,6 +9,7 @@ public class Channel
     public string? HubSecret { get; set; }
     public DateTimeOffset? LeaseExpiresAt { get; set; }
     public DateTimeOffset? LastSeenPublishedAt { get; set; }
+    public DateTimeOffset? LastWebSubNotification { get; set; }
     
     // Channel metadata
     public string? ChannelName { get; set; }
