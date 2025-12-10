@@ -78,10 +78,11 @@ builder.Services.AddSingleton<IBackgroundTaskQueue>(sp =>
     return new BackgroundTaskQueue(options.BackgroundTaskQueueCapacity);
 });
 
-// Add background jobs (ReconciliationJob removed - now on-demand via API)
+// Add background jobs
 builder.Services.AddHostedService<QueuedHostedService>();
 builder.Services.AddHostedService<SubscriptionMaintenanceJob>();
 builder.Services.AddHostedService<ChannelCleanupJob>();
+builder.Services.AddHostedService<ReconciliationJob>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<YouTubeApiStatusService>());
 
 // Add rate limiting (#3)

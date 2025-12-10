@@ -156,4 +156,79 @@ public class ReconciliationService
 
         return newVideosCount;
     }
+    
+    /// <summary>
+    /// Reconciles videos for a single channel and updates its reconciliation metadata.
+    /// </summary>
+    /// <param name="channel">Channel to reconcile</param>
+    /// <param name="db">Database context</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    /// <returns>Number of new videos discovered</returns>
+    public async Task<int> ReconcileSingleChannelAsync(
+        Channel channel,
+        MeTubeDbContext db,
+        CancellationToken cancellationToken = default)
+    {
+        var newVideos = await ReconcileChannelAsync(channel, db, cancellationToken);
+        
+        // Update reconciliation timestamp
+        channel.LastReconciledAt = DateTimeOffset.UtcNow;
+        
+        // Calculate and update average publish interval
+        await UpdateChannelActivityAsync(channel, db, cancellationToken);
+        
+        await db.SaveChangesAsync(cancellationToken);
+        
+        return newVideos;
+    }
+    
+    /// <summary>
+    /// Calculates and updates the average publishing interval for a channel.
+    /// </summary>
+    private async Task UpdateChannelActivityAsync(
+        Channel channel,
+        MeTubeDbContext db,
+        CancellationToken cancellationToken)
+    {
+        // Get the last 10 videos to calculate average interval
+        var recentVideos = await db.Videos
+            .Where(v => v.ChannelId == channel.Id)
+            .OrderByDescending(v => v.PublishedAt)
+            .Take(10)
+            .Select(v => v.PublishedAt)
+            .ToListAsync(cancellationToken);
+        
+        if (recentVideos.Count < 2)
+        {
+            // Not enough data to calculate interval
+            // Default to a long interval (30 days) for inactive channels
+            channel.AveragePublishInterval = TimeSpan.FromDays(30);
+            return;
+        }
+        
+        // Calculate intervals between consecutive videos
+        var intervals = new List<TimeSpan>();
+        for (int i = 0; i < recentVideos.Count - 1; i++)
+        {
+            var interval = recentVideos[i] - recentVideos[i + 1];
+            if (interval > TimeSpan.Zero)
+            {
+                intervals.Add(interval);
+            }
+        }
+        
+        if (intervals.Count == 0)
+        {
+            channel.AveragePublishInterval = TimeSpan.FromDays(30);
+            return;
+        }
+        
+        // Calculate average interval
+        var totalTicks = intervals.Sum(i => i.Ticks);
+        var averageTicks = totalTicks / intervals.Count;
+        channel.AveragePublishInterval = TimeSpan.FromTicks(averageTicks);
+        
+        _logger.LogDebug("Channel {ChannelId} average publish interval: {Interval}", 
+            channel.ChannelId, channel.AveragePublishInterval);
+    }
 }

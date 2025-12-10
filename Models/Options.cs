@@ -71,4 +71,39 @@ public class HubOptions
     /// Example: "https://example.com,https://app.example.com"
     /// </summary>
     public string CorsAllowedOrigins { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Base interval for reconciliation job execution in minutes.
+    /// </summary>
+    public int ReconciliationBaseIntervalMinutes { get; set; } = 60;
+    
+    /// <summary>
+    /// Multiplier for channels that publish daily or more frequently.
+    /// </summary>
+    public double ReconciliationHighActivityMultiplier { get; set; } = 2.0;
+    
+    /// <summary>
+    /// Multiplier for channels that publish weekly.
+    /// </summary>
+    public double ReconciliationMediumActivityMultiplier { get; set; } = 12.0;
+    
+    /// <summary>
+    /// Multiplier for channels that publish monthly.
+    /// </summary>
+    public double ReconciliationLowActivityMultiplier { get; set; } = 48.0;
+    
+    /// <summary>
+    /// Multiplier for inactive channels (no videos in 90+ days).
+    /// </summary>
+    public double ReconciliationInactiveMultiplier { get; set; } = 168.0;
+    
+    /// <summary>
+    /// Minimum reconciliation interval in hours.
+    /// </summary>
+    public double ReconciliationMinIntervalHours { get; set; } = 2.0;
+    
+    /// <summary>
+    /// Maximum reconciliation interval in days.
+    /// </summary>
+    public double ReconciliationMaxIntervalDays { get; set; } = 7.0;
 }

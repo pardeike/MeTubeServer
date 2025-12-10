@@ -15,6 +15,10 @@ public class Channel
     public string? ChannelThumbnailUrl { get; set; }
     public DateTimeOffset? MetadataLastUpdated { get; set; }
     
+    // Reconciliation tracking for adaptive refresh
+    public DateTimeOffset? LastReconciledAt { get; set; }
+    public TimeSpan? AveragePublishInterval { get; set; }
+    
     public ICollection<UserChannel> UserChannels { get; set; } = new List<UserChannel>();
     public ICollection<Video> Videos { get; set; } = new List<Video>();
 }
