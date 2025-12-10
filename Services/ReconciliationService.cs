@@ -77,7 +77,7 @@ public class ReconciliationService
             bucketCounts[bucket] += 1;
 
             var baseInterval = ComputeBaseInterval(cadence.CadenceEma);
-            state = GetOrCreateState(channel, baseInterval, cadence, state);
+            state = GetOrCreateState(channel, baseInterval, cadence);
 
             if (!ShouldReconcileChannel(channel, state, cadence, now, out var waitTime, out var reason))
             {
@@ -271,8 +271,7 @@ public class ReconciliationService
     internal ChannelReconcileState GetOrCreateState(
         Channel channel,
         TimeSpan baseInterval,
-        ChannelCadence cadence,
-        ChannelReconcileState? existingState)
+        ChannelCadence cadence)
     {
         var state = _channelReconcileStates.AddOrUpdate(
             channel.Id,
